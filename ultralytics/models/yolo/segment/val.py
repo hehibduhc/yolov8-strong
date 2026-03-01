@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 
 from ultralytics.models.yolo.detect import DetectionValidator
@@ -70,6 +71,14 @@ class SegmentationValidator(DetectionValidator):
             model (torch.nn.Module): Model to validate.
         """
         super().init_metrics(model)
+        self.miou_inter_fg = 0.0
+        self.miou_union_fg = 0.0
+        self.miou_inter_bg = 0.0
+        self.miou_union_bg = 0.0
+        self.crack_class_id = 0
+        self.iou_crack = 0.0
+        self.iou_bg = 0.0
+        self.miou = 0.0
         if self.args.save_json:
             check_requirements("faster-coco-eval>=1.6.7")
         # More accurate vs faster
@@ -77,7 +86,7 @@ class SegmentationValidator(DetectionValidator):
 
     def get_desc(self) -> str:
         """Return a formatted description of evaluation metrics."""
-        return ("%22s" + "%11s" * 10) % (
+        return ("%22s" + "%11s" * 13) % (
             "Class",
             "Images",
             "Instances",
@@ -89,7 +98,69 @@ class SegmentationValidator(DetectionValidator):
             "R",
             "mAP50",
             "mAP50-95)",
+            "IoU_fg",
+            "IoU_bg",
+            "mIoU",
         )
+
+    def gather_stats(self) -> None:
+        """Gather stats from all GPUs, including crack/background pixel IoU accumulators."""
+        if dist.is_available() and dist.is_initialized():
+            totals = torch.tensor(
+                [self.miou_inter_fg, self.miou_union_fg, self.miou_inter_bg, self.miou_union_bg],
+                device=self.device,
+                dtype=torch.float64,
+            )
+            dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+            self.miou_inter_fg, self.miou_union_fg, self.miou_inter_bg, self.miou_union_bg = totals.tolist()
+        super().gather_stats()
+
+    def get_stats(self) -> dict[str, Any]:
+        """Calculate and return metrics statistics, including crack/background pixel IoU and mIoU."""
+        stats = super().get_stats()
+        eps = 1e-7
+        self.iou_crack = self.miou_inter_fg / (self.miou_union_fg + eps)
+        self.iou_bg = self.miou_inter_bg / (self.miou_union_bg + eps)
+        self.miou = (self.iou_crack + self.iou_bg) / 2
+        stats.update(
+            {
+                "metrics/IoU_crack(M)": self.iou_crack,
+                "metrics/IoU_background(M)": self.iou_bg,
+                "metrics/mIoU(M)": self.miou,
+            }
+        )
+        return stats
+
+    def print_results(self) -> None:
+        """Print training/validation set metrics with crack/background pixel IoU and mIoU."""
+        pf = "%22s" + "%11i" * 2 + "%11.3g" * (len(self.metrics.keys) + 3)
+        LOGGER.info(
+            pf
+            % (
+                "all",
+                self.seen,
+                self.metrics.nt_per_class.sum(),
+                *self.metrics.mean_results(),
+                self.iou_crack,
+                self.iou_bg,
+                self.miou,
+            )
+        )
+        if self.metrics.nt_per_class.sum() == 0:
+            LOGGER.warning(f"no labels found in {self.args.task} set, can not compute metrics without labels")
+
+        if self.args.verbose and not self.training and self.nc > 1 and len(self.metrics.stats):
+            pf_class = "%22s" + "%11i" * 2 + "%11.3g" * len(self.metrics.keys)
+            for i, c in enumerate(self.metrics.ap_class_index):
+                LOGGER.info(
+                    pf_class
+                    % (
+                        self.names[c],
+                        self.metrics.nt_per_image[c],
+                        self.metrics.nt_per_class[c],
+                        *self.metrics.class_result(i),
+                    )
+                )
 
     def postprocess(self, preds: list[torch.Tensor]) -> list[dict[str, torch.Tensor]]:
         """Post-process YOLO predictions and return output detections with proto.
@@ -162,6 +233,7 @@ class SegmentationValidator(DetectionValidator):
             - If `overlap` is True and `masks` is True, overlapping masks are taken into account when computing IoU.
         """
         tp = super()._process_batch(preds, batch)
+        self._update_pixel_miou(preds, batch)
         gt_cls = batch["cls"]
         if gt_cls.shape[0] == 0 or preds["cls"].shape[0] == 0:
             tp_m = np.zeros((preds["cls"].shape[0], self.niou), dtype=bool)
@@ -170,6 +242,49 @@ class SegmentationValidator(DetectionValidator):
             tp_m = self.match_predictions(preds["cls"], gt_cls, iou).cpu().numpy()
         tp.update({"tp_m": tp_m})  # update tp with mask IoU
         return tp
+
+    def _update_pixel_miou(self, preds: dict[str, torch.Tensor], batch: dict[str, Any]) -> None:
+        """Accumulate crack/background pixel intersection and union statistics over the validation set."""
+        gt_masks = batch["masks"]
+        gt_cls = batch["cls"]
+        pred_masks = preds["masks"]
+        pred_cls = preds["cls"]
+
+        if gt_masks.shape[0]:
+            h, w = gt_masks.shape[-2:]
+        elif pred_masks.shape[0]:
+            h, w = pred_masks.shape[-2:]
+        else:
+            h, w = batch["imgsz"]
+
+        gt_crack_mask = torch.zeros((h, w), dtype=torch.bool, device=gt_masks.device)
+        if gt_masks.shape[0]:
+            if gt_masks.shape[-2:] != (h, w):
+                gt_masks = F.interpolate(gt_masks[None].float(), size=(h, w), mode="nearest")[0]
+            gt_crack_instances = gt_masks[gt_cls == self.crack_class_id]
+            if gt_crack_instances.shape[0]:
+                gt_crack_mask = gt_crack_instances.bool().any(0)
+
+        pred_crack_mask = torch.zeros((h, w), dtype=torch.bool, device=pred_masks.device)
+        if pred_masks.shape[0]:
+            if pred_masks.shape[-2:] != (h, w):
+                pred_masks = F.interpolate(pred_masks[None].float(), size=(h, w), mode="nearest")[0]
+            pred_crack_instances = pred_masks[pred_cls == self.crack_class_id]
+            if pred_crack_instances.shape[0]:
+                pred_crack_mask = pred_crack_instances.gt(0.5).any(0)
+
+        gt_bg_mask = ~gt_crack_mask
+        pred_bg_mask = ~pred_crack_mask
+
+        inter_fg = (pred_crack_mask & gt_crack_mask).sum()
+        union_fg = (pred_crack_mask | gt_crack_mask).sum()
+        inter_bg = (pred_bg_mask & gt_bg_mask).sum()
+        union_bg = (pred_bg_mask | gt_bg_mask).sum()
+
+        self.miou_inter_fg += float(inter_fg)
+        self.miou_union_fg += float(union_fg)
+        self.miou_inter_bg += float(inter_bg)
+        self.miou_union_bg += float(union_bg)
 
     def plot_predictions(self, batch: dict[str, Any], preds: list[dict[str, torch.Tensor]], ni: int) -> None:
         """Plot batch predictions with masks and bounding boxes.
