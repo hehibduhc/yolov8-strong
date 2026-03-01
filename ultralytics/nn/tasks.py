@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from spd_dcnv2 import SPD_DCNv2Down
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
@@ -69,7 +70,6 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     v10Detect,
 )
-from spd_dcnv2 import SPD_DCNv2Down
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
