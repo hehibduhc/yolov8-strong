@@ -322,11 +322,24 @@ class C2f(nn.Module):
 class MDKAConv(nn.Module):
     """Multi-dilated kernel aggregation convolution block."""
 
-    def __init__(self, c: int, kc: int = 3, act: str = "silu", use_gelu: bool = False):
+    def __init__(
+        self,
+        c: int,
+        kc: int = 3,
+        act: str = "silu",
+        use_gelu: bool = False,
+        gated: bool = False,
+        gate_type: str = "softmax",
+        reduction: int = 16,
+    ):
         """Initialize MDKAConv."""
         super().__init__()
         if c <= 0:
             raise ValueError(f"c must be positive, but got {c}")
+        if reduction <= 0:
+            raise ValueError(f"reduction must be positive, but got {reduction}")
+        if gate_type not in {"softmax", "sigmoid"}:
+            raise ValueError(f"Unsupported gate_type='{gate_type}', expected 'softmax' or 'sigmoid'.")
 
         def get_act() -> nn.Module:
             if use_gelu:
@@ -377,6 +390,18 @@ class MDKAConv(nn.Module):
         # 修改理由：三路 concat 后用 1x1 融合并投影回原通道。
         self.fuse = Conv(3 * c, c, k=1, s=1, act=get_act())
 
+        # 修改理由：按需启用轻量门控融合，在分支聚合前动态调整各分支贡献。
+        self.gated = gated
+        self.gate_type = gate_type
+        if self.gated:
+            hidden_c = max(c // reduction, 1)
+            self.gap = nn.AdaptiveAvgPool2d(1)
+            self.gate_mlp = nn.Sequential(
+                nn.Conv2d(c, hidden_c, 1, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(hidden_c, 1, 1, bias=True),
+            )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through MDKAConv."""
         xin = self.xin(x)
@@ -389,6 +414,14 @@ class MDKAConv(nn.Module):
         y3b = self.s3b(y3a)
         y3 = y3b + self.s3c(y3b)
 
+        if self.gated:
+            w = torch.cat((self.gate_mlp(self.gap(y1)), self.gate_mlp(self.gap(y2)), self.gate_mlp(self.gap(y3))), 1)
+            if self.gate_type == "softmax":
+                w = w.softmax(1)
+            else:
+                w = w.sigmoid()
+            y1, y2, y3 = y1 * w[:, 0:1], y2 * w[:, 1:2], y3 * w[:, 2:3]
+
         out = self.fuse(torch.cat((y1, y2, y3), 1))
         return out + xin
 
@@ -396,12 +429,21 @@ class MDKAConv(nn.Module):
 class MDKABottleneck(nn.Module):
     """Bottleneck variant with MDKAConv for context aggregation."""
 
-    def __init__(self, c1: int, c2: int, shortcut: bool = True, e: float = 0.5, g: int = 1, kc: int = 3):
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        shortcut: bool = True,
+        e: float = 0.5,
+        g: int = 1,
+        kc: int = 3,
+        gated: bool = False,
+    ):
         """Initialize MDKABottleneck."""
         super().__init__()
         c_ = int(c2 * e)
         self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = MDKAConv(c_, kc=kc)
+        self.cv2 = MDKAConv(c_, kc=kc, gated=gated)
         self.cv3 = Conv(c_, c2, 1, 1)
         self.add = shortcut and c1 == c2
 
@@ -414,13 +456,23 @@ class MDKABottleneck(nn.Module):
 class C2fMDKA(nn.Module):
     """C2f module using MDKA bottlenecks while preserving I/O behavior."""
 
-    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5, kc: int = 3):
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        n: int = 1,
+        shortcut: bool = False,
+        g: int = 1,
+        e: float = 0.5,
+        kc: int = 3,
+        gated: bool = False,
+    ):
         """Initialize C2fMDKA."""
         super().__init__()
         self.c = int(c2 * e)
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)
-        self.m = nn.ModuleList(MDKABottleneck(self.c, self.c, shortcut, e=1.0, g=g, kc=kc) for _ in range(n))
+        self.m = nn.ModuleList(MDKABottleneck(self.c, self.c, shortcut, e=1.0, g=g, kc=kc, gated=gated) for _ in range(n))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2fMDKA layer."""
