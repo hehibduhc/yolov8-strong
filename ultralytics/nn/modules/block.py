@@ -329,6 +329,10 @@ class MDKAConv(nn.Module):
         act: str = "silu",
         use_gelu: bool = False,
         gated: bool = False,
+        dilations: tuple[int, int, int] = (1, 2, 3),
+        boundary: bool = False,
+        boundary_weight: float = 1.0,
+        boundary_mode: str = "sobel",
         gate_type: str = "softmax",
         reduction: int = 16,
     ):
@@ -338,6 +342,12 @@ class MDKAConv(nn.Module):
             raise ValueError(f"c must be positive, but got {c}")
         if reduction <= 0:
             raise ValueError(f"reduction must be positive, but got {reduction}")
+        if len(dilations) != 3:
+            raise ValueError(f"dilations must contain 3 values for MDKA branches, but got {dilations}")
+        if any(d <= 0 for d in dilations):
+            raise ValueError(f"all dilations must be positive, but got {dilations}")
+        if boundary_mode != "sobel":
+            raise ValueError(f"Unsupported boundary_mode='{boundary_mode}', expected 'sobel'.")
         if gate_type not in {"softmax", "sigmoid"}:
             raise ValueError(f"Unsupported gate_type='{gate_type}', expected 'softmax' or 'sigmoid'.")
 
@@ -350,12 +360,14 @@ class MDKAConv(nn.Module):
                 return nn.ReLU(inplace=True)
             raise ValueError(f"Unsupported act='{act}', expected 'silu' or 'relu'.")
 
+        d1, d2, d3 = dilations
+
         # 修改理由：保留论文中的 Conv_kc 预处理，形成 Xin 分支。
         self.xin = Conv(c, c, k=kc, s=1, act=get_act())
 
         # 修改理由：构建三个不同感受野/膨胀率分支并在分支内部做加和聚合。
         self.s1 = nn.Sequential(
-            nn.Conv2d(c, c, 3, stride=1, padding=1, dilation=1, bias=False),
+            nn.Conv2d(c, c, 3, stride=1, padding=d1, dilation=d1, bias=False),
             nn.BatchNorm2d(c),
             get_act(),
         )
@@ -366,7 +378,7 @@ class MDKAConv(nn.Module):
             get_act(),
         )
         self.s2b = nn.Sequential(
-            nn.Conv2d(c, c, 3, stride=1, padding=2, dilation=2, bias=False),
+            nn.Conv2d(c, c, 3, stride=1, padding=d2, dilation=d2, bias=False),
             nn.BatchNorm2d(c),
             get_act(),
         )
@@ -377,12 +389,12 @@ class MDKAConv(nn.Module):
             get_act(),
         )
         self.s3b = nn.Sequential(
-            nn.Conv2d(c, c, 3, stride=1, padding=2, dilation=2, bias=False),
+            nn.Conv2d(c, c, 3, stride=1, padding=d2, dilation=d2, bias=False),
             nn.BatchNorm2d(c),
             get_act(),
         )
         self.s3c = nn.Sequential(
-            nn.Conv2d(c, c, 3, stride=1, padding=3, dilation=3, bias=False),
+            nn.Conv2d(c, c, 3, stride=1, padding=d3, dilation=d3, bias=False),
             nn.BatchNorm2d(c),
             get_act(),
         )
@@ -401,6 +413,18 @@ class MDKAConv(nn.Module):
                 nn.ReLU(inplace=True),
                 nn.Conv2d(hidden_c, 1, 1, bias=True),
             )
+
+        # 修改理由：按需启用边界敏感增强分支，以残差注入方式增强裂缝轮廓响应且不改变输出形状。
+        self.boundary = boundary
+        self.boundary_weight = boundary_weight
+        if self.boundary:
+            sobel_x = torch.tensor([[1.0, 0.0, -1.0], [2.0, 0.0, -2.0], [1.0, 0.0, -1.0]], dtype=torch.float32)
+            sobel_y = torch.tensor([[1.0, 2.0, 1.0], [0.0, 0.0, 0.0], [-1.0, -2.0, -1.0]], dtype=torch.float32)
+            self.register_buffer("sobel_x", sobel_x.view(1, 1, 3, 3).repeat(c, 1, 1, 1), persistent=False)
+            self.register_buffer("sobel_y", sobel_y.view(1, 1, 3, 3).repeat(c, 1, 1, 1), persistent=False)
+            self.boundary_alpha_x = nn.Parameter(torch.ones(1, c, 1, 1))
+            self.boundary_alpha_y = nn.Parameter(torch.ones(1, c, 1, 1))
+            self.boundary_proj = Conv(c, c, k=1, s=1, act=get_act())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through MDKAConv."""
@@ -423,6 +447,11 @@ class MDKAConv(nn.Module):
             y1, y2, y3 = y1 * w[:, 0:1], y2 * w[:, 1:2], y3 * w[:, 2:3]
 
         out = self.fuse(torch.cat((y1, y2, y3), 1))
+        if self.boundary:
+            gx = F.conv2d(xin, self.sobel_x, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_x
+            gy = F.conv2d(xin, self.sobel_y, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_y
+            g = torch.abs(gx) + torch.abs(gy)
+            out = out + self.boundary_weight * self.boundary_proj(g)
         return out + xin
 
 
@@ -438,12 +467,24 @@ class MDKABottleneck(nn.Module):
         g: int = 1,
         kc: int = 3,
         gated: bool = False,
+        dilations: tuple[int, int, int] = (1, 2, 3),
+        boundary: bool = False,
+        boundary_weight: float = 1.0,
+        boundary_mode: str = "sobel",
     ):
         """Initialize MDKABottleneck."""
         super().__init__()
         c_ = int(c2 * e)
         self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = MDKAConv(c_, kc=kc, gated=gated)
+        self.cv2 = MDKAConv(
+            c_,
+            kc=kc,
+            gated=gated,
+            dilations=dilations,
+            boundary=boundary,
+            boundary_weight=boundary_weight,
+            boundary_mode=boundary_mode,
+        )
         self.cv3 = Conv(c_, c2, 1, 1)
         self.add = shortcut and c1 == c2
 
@@ -466,13 +507,32 @@ class C2fMDKA(nn.Module):
         e: float = 0.5,
         kc: int = 3,
         gated: bool = False,
+        dilations: tuple[int, int, int] = (1, 2, 3),
+        boundary: bool = False,
+        boundary_weight: float = 1.0,
+        boundary_mode: str = "sobel",
     ):
         """Initialize C2fMDKA."""
         super().__init__()
         self.c = int(c2 * e)
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)
-        self.m = nn.ModuleList(MDKABottleneck(self.c, self.c, shortcut, e=1.0, g=g, kc=kc, gated=gated) for _ in range(n))
+        self.m = nn.ModuleList(
+            MDKABottleneck(
+                self.c,
+                self.c,
+                shortcut,
+                e=1.0,
+                g=g,
+                kc=kc,
+                gated=gated,
+                dilations=dilations,
+                boundary=boundary,
+                boundary_weight=boundary_weight,
+                boundary_mode=boundary_mode,
+            )
+            for _ in range(n)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2fMDKA layer."""
