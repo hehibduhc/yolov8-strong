@@ -32,6 +32,7 @@ __all__ = (
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
+    "C2fMDKA",
     "C2fDWR",
     "C2fAttn",
     "C2fCIB",
@@ -43,6 +44,8 @@ __all__ = (
     "CBLinear",
     "ContrastiveHead",
     "DWRBottleneck",
+    "MDKAConv",
+    "MDKABottleneck",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
@@ -304,6 +307,123 @@ class C2f(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2f layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+    def forward_split(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass using split() instead of chunk()."""
+        y = self.cv1(x).split((self.c, self.c), 1)
+        y = [y[0], y[1]]
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
+class MDKAConv(nn.Module):
+    """Multi-dilated kernel aggregation convolution block."""
+
+    def __init__(self, c: int, kc: int = 3, act: str = "silu", use_gelu: bool = False):
+        """Initialize MDKAConv."""
+        super().__init__()
+        if c <= 0:
+            raise ValueError(f"c must be positive, but got {c}")
+
+        def get_act() -> nn.Module:
+            if use_gelu:
+                return nn.GELU()
+            if act == "silu":
+                return nn.SiLU()
+            if act == "relu":
+                return nn.ReLU(inplace=True)
+            raise ValueError(f"Unsupported act='{act}', expected 'silu' or 'relu'.")
+
+        # 修改理由：保留论文中的 Conv_kc 预处理，形成 Xin 分支。
+        self.xin = Conv(c, c, k=kc, s=1, act=get_act())
+
+        # 修改理由：构建三个不同感受野/膨胀率分支并在分支内部做加和聚合。
+        self.s1 = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=1, dilation=1, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+
+        self.s2a = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=1, dilation=1, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+        self.s2b = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=2, dilation=2, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+
+        self.s3a = nn.Sequential(
+            nn.Conv2d(c, c, 5, stride=1, padding=2, dilation=1, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+        self.s3b = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=2, dilation=2, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+        self.s3c = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=3, dilation=3, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+
+        # 修改理由：三路 concat 后用 1x1 融合并投影回原通道。
+        self.fuse = Conv(3 * c, c, k=1, s=1, act=get_act())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through MDKAConv."""
+        xin = self.xin(x)
+        y1 = self.s1(xin)
+
+        y2a = self.s2a(xin)
+        y2 = y2a + self.s2b(y2a)
+
+        y3a = self.s3a(xin)
+        y3b = self.s3b(y3a)
+        y3 = y3b + self.s3c(y3b)
+
+        out = self.fuse(torch.cat((y1, y2, y3), 1))
+        return out + xin
+
+
+class MDKABottleneck(nn.Module):
+    """Bottleneck variant with MDKAConv for context aggregation."""
+
+    def __init__(self, c1: int, c2: int, shortcut: bool = True, e: float = 0.5, g: int = 1, kc: int = 3):
+        """Initialize MDKABottleneck."""
+        super().__init__()
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = MDKAConv(c_, kc=kc)
+        self.cv3 = Conv(c_, c2, 1, 1)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through MDKABottleneck."""
+        y = self.cv3(self.cv2(self.cv1(x)))
+        return x + y if self.add else y
+
+
+class C2fMDKA(nn.Module):
+    """C2f module using MDKA bottlenecks while preserving I/O behavior."""
+
+    def __init__(self, c1: int, c2: int, n: int = 1, shortcut: bool = False, g: int = 1, e: float = 0.5, kc: int = 3):
+        """Initialize C2fMDKA."""
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(MDKABottleneck(self.c, self.c, shortcut, e=1.0, g=g, kc=kc) for _ in range(n))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through C2fMDKA layer."""
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
