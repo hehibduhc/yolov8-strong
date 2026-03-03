@@ -6,11 +6,11 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 try:
     # 最推荐：mmcv 的 ModulatedDeformConv2d 就是 DCNv2 的常用实现
     from mmcv.ops import ModulatedDeformConv2d
+
     _HAS_MMCV = True
 except Exception:
     _HAS_MMCV = False
@@ -18,6 +18,7 @@ except Exception:
 
 class SpaceToDepth(nn.Module):
     """Space-to-Depth (pixel unshuffle variant): scale=2 => H,W /2 and C*4."""
+
     def __init__(self, scale: int = 2):
         super().__init__()
         assert scale >= 2 and isinstance(scale, int)
@@ -29,14 +30,15 @@ class SpaceToDepth(nn.Module):
         assert h % s == 0 and w % s == 0, f"Input (H,W)=({h},{w}) must be divisible by scale={s}"
         # 等价于论文里四路采样并在通道维 concat（scale=2 时是4路）
         # 更一般化：用 view/permute 实现任意scale
-        x = x.view(b, c, h // s, s, w // s, s)          # b,c,h/s,s,w/s,s
-        x = x.permute(0, 1, 3, 5, 2, 4).contiguous()    # b,c,s,s,h/s,w/s
-        x = x.view(b, c * s * s, h // s, w // s)        # b,c*s^2,h/s,w/s
+        x = x.view(b, c, h // s, s, w // s, s)  # b,c,h/s,s,w/s,s
+        x = x.permute(0, 1, 3, 5, 2, 4).contiguous()  # b,c,s,s,h/s,w/s
+        x = x.view(b, c * s * s, h // s, w // s)  # b,c*s^2,h/s,w/s
         return x
 
 
 class ConvBNAct(nn.Module):
     """Conv + BN + SiLU (与YOLOv8风格一致)."""
+
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
         super().__init__()
         if p is None:
@@ -50,17 +52,16 @@ class ConvBNAct(nn.Module):
 
 
 class DCNv2BNAct(nn.Module):
+    """DCNv2 block: Modulated Deformable Conv + BN + SiLU 说明： - offset+mask 通过一个普通卷积从输入特征预测（标准DCNv2做法） - deform conv
+    stride=1（下采样由SPD完成）.
     """
-    DCNv2 block: Modulated Deformable Conv + BN + SiLU
-    说明：
-      - offset+mask 通过一个普通卷积从输入特征预测（标准DCNv2做法）
-      - deform conv stride=1（下采样由SPD完成）
-    """
+
     def __init__(self, c1, c2, k=3, s=1, p=None, groups=1, deform_groups=1, act=True):
         super().__init__()
         if not _HAS_MMCV:
-            raise ImportError("mmcv is required for ModulatedDeformConv2d (DCNv2). "
-                              "Install mmcv-full matching your CUDA/PyTorch.")
+            raise ImportError(
+                "mmcv is required for ModulatedDeformConv2d (DCNv2). Install mmcv-full matching your CUDA/PyTorch."
+            )
         if p is None:
             p = k // 2
         self.k = k
@@ -79,7 +80,7 @@ class DCNv2BNAct(nn.Module):
             dilation=1,
             groups=groups,
             deform_groups=deform_groups,
-            bias=False
+            bias=False,
         )
         self.bn = nn.BatchNorm2d(c2)
         self.act = nn.SiLU(inplace=True) if act else nn.Identity()
@@ -91,7 +92,7 @@ class DCNv2BNAct(nn.Module):
 
         o1 = 2 * k2 * dg
         offset = out[:, :o1, :, :]
-        mask = out[:, o1:o1 + k2 * dg, :, :].sigmoid()
+        mask = out[:, o1 : o1 + k2 * dg, :, :].sigmoid()
 
         x = self.dcn(x, offset, mask)
         x = self.act(self.bn(x))
@@ -99,11 +100,9 @@ class DCNv2BNAct(nn.Module):
 
 
 class SPD_DCNv2Down(nn.Module):
+    """无池化下采样：SPD(scale=2) -> 1x1瓶颈(压通道) -> DCNv2(3x3, s=1) -> (可选1x1融合) - 输入: (B, Cin, H, W) - 输出: (B, Cout, H/2, W/2).
     """
-    无池化下采样：SPD(scale=2) -> 1x1瓶颈(压通道) -> DCNv2(3x3, s=1) -> (可选1x1融合)
-    - 输入:  (B, Cin, H, W)
-    - 输出:  (B, Cout, H/2, W/2)
-    """
+
     def __init__(self, c1, c2, scale=2, bottleneck_ratio=0.5, deform_groups=1, fuse_1x1=False):
         super().__init__()
         self.spd = SpaceToDepth(scale=scale)
