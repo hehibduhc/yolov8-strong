@@ -32,10 +32,10 @@ __all__ = (
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
-    "C2fMDKA",
-    "C2fDWR",
     "C2fAttn",
     "C2fCIB",
+    "C2fDWR",
+    "C2fMDKA",
     "C2fPSA",
     "C3Ghost",
     "C3k2",
@@ -44,12 +44,12 @@ __all__ = (
     "CBLinear",
     "ContrastiveHead",
     "DWRBottleneck",
-    "MDKAConv",
-    "MDKABottleneck",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
+    "MDKABottleneck",
+    "MDKAConv",
     "Proto",
     "RepC3",
     "RepNCSPELAN4",
@@ -472,7 +472,9 @@ class C2fMDKA(nn.Module):
         self.c = int(c2 * e)
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)
-        self.m = nn.ModuleList(MDKABottleneck(self.c, self.c, shortcut, e=1.0, g=g, kc=kc, gated=gated) for _ in range(n))
+        self.m = nn.ModuleList(
+            MDKABottleneck(self.c, self.c, shortcut, e=1.0, g=g, kc=kc, gated=gated) for _ in range(n)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2fMDKA layer."""
