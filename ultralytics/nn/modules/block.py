@@ -32,6 +32,7 @@ __all__ = (
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
+    "C2fDWR",
     "C2fAttn",
     "C2fCIB",
     "C2fPSA",
@@ -41,6 +42,7 @@ __all__ = (
     "CBFuse",
     "CBLinear",
     "ContrastiveHead",
+    "DWRBottleneck",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
@@ -302,6 +304,105 @@ class C2f(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2f layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+    def forward_split(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass using split() instead of chunk()."""
+        y = self.cv1(x).split((self.c, self.c), 1)
+        y = [y[0], y[1]]
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
+class DWRBottleneck(nn.Module):
+    """Two-step multi-scale context bottleneck with optional branch gating."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        shortcut: bool = True,
+        e: float = 0.5,
+        dilations: tuple[int, ...] = (1, 3),
+        g: int = 1,
+        use_branch_gate: bool = False,
+    ):
+        """Initialize DWR bottleneck."""
+        super().__init__()
+        if not dilations:
+            raise ValueError("dilations must contain at least one dilation value")
+
+        c_ = int(c2 * e)
+        c_ = max(c_, len(dilations))
+        c_ = max((c_ // len(dilations)) * len(dilations), len(dilations))
+        branch_c = c_ // len(dilations)
+
+        self.add = shortcut and c1 == c2
+        self.use_branch_gate = use_branch_gate
+        self.cv1 = Conv(c1, c_, 3, 1, g=g)
+        self.sr = nn.ModuleList(
+            nn.Conv2d(branch_c, branch_c, 3, stride=1, padding=d, dilation=d, groups=branch_c, bias=False)
+            for d in dilations
+        )
+        self.sr_bn = nn.ModuleList(nn.BatchNorm2d(branch_c) for _ in dilations)
+        self.cv2 = Conv(c_, c2, 1, 1)
+
+        if self.use_branch_gate:
+            self.gate = nn.Sequential(
+                nn.AdaptiveAvgPool2d(1),
+                nn.Conv2d(c_, len(dilations), 1, bias=True),
+            )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through DWR bottleneck."""
+        y = self.cv1(x)
+        branches = list(y.chunk(len(self.sr), 1))
+        if self.use_branch_gate:
+            gate = F.softmax(self.gate(y), dim=1)
+        for i, (conv, bn) in enumerate(zip(self.sr, self.sr_bn)):
+            branches[i] = F.silu(bn(conv(branches[i])))
+            if self.use_branch_gate:
+                branches[i] = branches[i] * gate[:, i : i + 1]
+        y = self.cv2(torch.cat(branches, 1))
+        return x + y if self.add else y
+
+
+class C2fDWR(nn.Module):
+    """C2f variant using DWR bottlenecks with the same interface/output shape as C2f."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        n: int = 1,
+        shortcut: bool = False,
+        g: int = 1,
+        e: float = 0.5,
+        dilations: tuple[int, ...] = (1, 3),
+        use_branch_gate: bool = False,
+    ):
+        """Initialize C2fDWR."""
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(
+            DWRBottleneck(
+                self.c,
+                self.c,
+                shortcut=shortcut,
+                e=1.0,
+                dilations=dilations,
+                g=g,
+                use_branch_gate=use_branch_gate,
+            )
+            for _ in range(n)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through C2fDWR."""
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
