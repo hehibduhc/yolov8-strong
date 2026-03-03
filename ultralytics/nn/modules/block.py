@@ -32,10 +32,10 @@ __all__ = (
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
-    "C2fMDKA",
-    "C2fDWR",
     "C2fAttn",
     "C2fCIB",
+    "C2fDWR",
+    "C2fMDKA",
     "C2fPSA",
     "C3Ghost",
     "C3k2",
@@ -44,12 +44,12 @@ __all__ = (
     "CBLinear",
     "ContrastiveHead",
     "DWRBottleneck",
-    "MDKAConv",
-    "MDKABottleneck",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
+    "MDKABottleneck",
+    "MDKAConv",
     "Proto",
     "RepC3",
     "RepNCSPELAN4",
@@ -448,8 +448,12 @@ class MDKAConv(nn.Module):
 
         out = self.fuse(torch.cat((y1, y2, y3), 1))
         if self.boundary:
-            gx = F.conv2d(xin, self.sobel_x, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_x
-            gy = F.conv2d(xin, self.sobel_y, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_y
+            gx = (
+                F.conv2d(xin, self.sobel_x, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_x
+            )
+            gy = (
+                F.conv2d(xin, self.sobel_y, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_y
+            )
             g = torch.abs(gx) + torch.abs(gy)
             out = out + self.boundary_weight * self.boundary_proj(g)
         return out + xin
