@@ -11,6 +11,7 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .fca import FCALayer, FCALayerResidual
+from .lska import DirectionalLSKA, LSKA, LSKARes
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -26,6 +27,9 @@ __all__ = (
     "SPP",
     "SPPELAN",
     "SPPF",
+    "SPPFLSKA",
+    "SPPFLSKARes",
+    "SPPFDLSKA",
     "SPPFFCA",
     "SPPFFCARes",
     "AConv",
@@ -290,6 +294,66 @@ class SPPFFCARes(nn.Module):
         y.extend(self.m(y[-1]) for _ in range(3))
         y = self.cv2(torch.cat(y, 1))
         return self.fca(y)
+
+
+class SPPFLSKA(nn.Module):
+    """SPPF followed by LSKA reweighting."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, lk: int = 23, ld: int = 3):
+        """Initialize SPPF-LSKA with unchanged SPPF topology and LSKA scaling."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.attn = LSKA(c2, k=lk, d=ld)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF, then LSKA reweighting while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.attn(y)
+
+
+class SPPFLSKARes(nn.Module):
+    """SPPF followed by residual LSKA reweighting."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, lk: int = 23, ld: int = 3, alpha: float = 0.5):
+        """Initialize SPPF-LSKARes with unchanged SPPF topology and residual LSKA scaling."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.attn = LSKARes(c2, k=lk, d=ld, alpha=alpha)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF, then residual LSKA reweighting while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.attn(y)
+
+
+class SPPFDLSKA(nn.Module):
+    """SPPF followed by directional residual LSKA reweighting."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, lk: int = 23, ld: int = 3, alpha: float = 0.5):
+        """Initialize SPPF-DLSKA with unchanged SPPF topology and directional LSKA scaling."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.attn = DirectionalLSKA(c2, k=lk, d=ld, alpha=alpha)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF, then directional residual LSKA reweighting while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.attn(y)
 
 
 class C1(nn.Module):
