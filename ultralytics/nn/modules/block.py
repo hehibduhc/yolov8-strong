@@ -11,7 +11,7 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .fca import FCALayer, FCALayerResidual
-from .lska import DirectionalLSKA, LSKA, LSKARes
+from .lska import LSKA, DirectionalLSKA, LSKARes
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -27,11 +27,9 @@ __all__ = (
     "SPP",
     "SPPELAN",
     "SPPF",
-    "SPPFLSKA",
-    "SPPFLSKARes",
     "SPPFDLSKA",
     "SPPFFCA",
-    "SPPFFCARes",
+    "SPPFLSKA",
     "AConv",
     "ADown",
     "Attention",
@@ -39,10 +37,10 @@ __all__ = (
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
-    "C2fMDKA",
-    "C2fDWR",
     "C2fAttn",
     "C2fCIB",
+    "C2fDWR",
+    "C2fMDKA",
     "C2fPSA",
     "C3Ghost",
     "C3k2",
@@ -51,18 +49,20 @@ __all__ = (
     "CBLinear",
     "ContrastiveHead",
     "DWRBottleneck",
-    "MDKAConv",
-    "MDKABottleneck",
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
+    "MDKABottleneck",
+    "MDKAConv",
     "Proto",
     "RepC3",
     "RepNCSPELAN4",
     "RepVGGDW",
     "ResNetLayer",
     "SCDown",
+    "SPPFFCARes",
+    "SPPFLSKARes",
     "TorchVision",
 )
 
@@ -247,7 +247,16 @@ class SPPF(nn.Module):
 class SPPFFCA(nn.Module):
     """SPPF followed by frequency channel attention (FCA) reweighting."""
 
-    def __init__(self, c1: int, c2: int, k: int = 5, dct_h: int = 7, dct_w: int = 7, reduction: int = 16, freq_sel_method: str = "top16"):
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        k: int = 5,
+        dct_h: int = 7,
+        dct_w: int = 7,
+        reduction: int = 16,
+        freq_sel_method: str = "top16",
+    ):
         """Initialize SPPF-FCA with unchanged SPPF topology and FCA channel scaling."""
         super().__init__()
         c_ = c1 // 2
@@ -567,8 +576,12 @@ class MDKAConv(nn.Module):
 
         out = self.fuse(torch.cat((y1, y2, y3), 1))
         if self.boundary:
-            gx = F.conv2d(xin, self.sobel_x, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_x
-            gy = F.conv2d(xin, self.sobel_y, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_y
+            gx = (
+                F.conv2d(xin, self.sobel_x, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_x
+            )
+            gy = (
+                F.conv2d(xin, self.sobel_y, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_y
+            )
             g = torch.abs(gx) + torch.abs(gy)
             out = out + self.boundary_weight * self.boundary_proj(g)
         return out + xin
