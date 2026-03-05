@@ -12,6 +12,7 @@ from ultralytics.utils.torch_utils import fuse_conv_and_bn
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .fca import FCALayer, FCALayerResidual
 from .lska import DirectionalLSKA, LSKA, LSKARes
+from .strip_pool import StripPoolingAtrous, StripPoolingLite, StripPoolingLiteRes
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -32,6 +33,9 @@ __all__ = (
     "SPPFDLSKA",
     "SPPFFCA",
     "SPPFFCARes",
+    "SPPFSP",
+    "SPPFSPRes",
+    "SPPFSPDC",
     "AConv",
     "ADown",
     "Attention",
@@ -262,6 +266,66 @@ class SPPFFCA(nn.Module):
         y.extend(self.m(y[-1]) for _ in range(3))
         y = self.cv2(torch.cat(y, 1))
         return self.fca(y)
+
+
+class SPPFSP(nn.Module):
+    """SPPF followed by lightweight strip pooling."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 4):
+        """Initialize SPPF-SP with unchanged SPPF topology and strip pooling reweighting."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.sp = StripPoolingLite(c2, reduction=reduction)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF then strip pooling while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.sp(y)
+
+
+class SPPFSPRes(nn.Module):
+    """SPPF followed by residual-safe lightweight strip pooling."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 4, alpha: float = 0.5):
+        """Initialize SPPF-SPRes with unchanged SPPF topology and residual strip pooling."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.sp = StripPoolingLiteRes(c2, reduction=reduction, alpha=alpha)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF then residual strip pooling while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.sp(y)
+
+
+class SPPFSPDC(nn.Module):
+    """SPPF followed by strip pooling and depthwise atrous enhancement."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, reduction: int = 4):
+        """Initialize SPPF-SPDC with unchanged SPPF topology and atrous strip pooling."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.sp = StripPoolingAtrous(c2, reduction=reduction, dilations=(2, 3))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF then strip pooling + atrous enhancement while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.sp(y)
 
 
 class SPPFFCARes(nn.Module):
