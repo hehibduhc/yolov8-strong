@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from ultralytics.utils.torch_utils import fuse_conv_and_bn
 
 from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
+from .fca import FCALayer, FCALayerResidual
 from .transformer import TransformerBlock
 
 __all__ = (
@@ -25,6 +26,8 @@ __all__ = (
     "SPP",
     "SPPELAN",
     "SPPF",
+    "SPPFFCA",
+    "SPPFFCARes",
     "AConv",
     "ADown",
     "Attention",
@@ -235,6 +238,58 @@ class SPPF(nn.Module):
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
         return self.cv2(torch.cat(y, 1))
+
+
+class SPPFFCA(nn.Module):
+    """SPPF followed by frequency channel attention (FCA) reweighting."""
+
+    def __init__(self, c1: int, c2: int, k: int = 5, dct_h: int = 7, dct_w: int = 7, reduction: int = 16, freq_sel_method: str = "top16"):
+        """Initialize SPPF-FCA with unchanged SPPF topology and FCA channel scaling."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.fca = FCALayer(c2, dct_h=dct_h, dct_w=dct_w, reduction=reduction, freq_sel_method=freq_sel_method)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF, then FCA channel reweighting while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.fca(y)
+
+
+class SPPFFCARes(nn.Module):
+    """SPPF followed by residual frequency channel attention (FCA) reweighting."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        k: int = 5,
+        dct_h: int = 7,
+        dct_w: int = 7,
+        reduction: int = 32,
+        freq_sel_method: str = "low16",
+        alpha: float = 0.5,
+    ):
+        """Initialize SPPF-FCARes with unchanged SPPF topology and residual FCA scaling."""
+        super().__init__()
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+        self.fca = FCALayerResidual(
+            c2, dct_h=dct_h, dct_w=dct_w, reduction=reduction, freq_sel_method=freq_sel_method, alpha=alpha
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF, then residual FCA channel reweighting while preserving shape."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        y = self.cv2(torch.cat(y, 1))
+        return self.fca(y)
 
 
 class C1(nn.Module):
