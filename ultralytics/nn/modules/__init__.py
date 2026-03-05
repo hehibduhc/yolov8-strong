@@ -30,8 +30,11 @@ from .block import (
     SPP,
     SPPELAN,
     SPPF,
+    SPPFDLSKA,
     SPPFFCA,
     SPPFFCARes,
+    SPPFLSKA,
+    SPPFLSKARes,
     A2C2f,
     AConv,
     ADown,
@@ -68,6 +71,7 @@ from .block import (
     TorchVision,
 )
 from .fca import FCALayer, FCALayerResidual
+from .lska import DirectionalLSKA, LSKA, LSKARes
 from .conv import (
     CBAM,
     ChannelAttention,
@@ -127,8 +131,11 @@ __all__ = (
     "SPP",
     "SPPELAN",
     "SPPF",
+    "SPPFDLSKA",
     "SPPFFCA",
     "SPPFFCARes",
+    "SPPFLSKA",
+    "SPPFLSKARes",
     "A2C2f",
     "AConv",
     "ADown",
@@ -186,6 +193,9 @@ __all__ = (
     "SCDown",
     "FCALayer",
     "FCALayerResidual",
+    "DirectionalLSKA",
+    "LSKA",
+    "LSKARes",
     "Segment",
     "SpatialAttention",
     "TorchVision",
