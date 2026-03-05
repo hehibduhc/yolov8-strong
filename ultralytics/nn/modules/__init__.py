@@ -35,6 +35,9 @@ from .block import (
     SPPFFCARes,
     SPPFLSKA,
     SPPFLSKARes,
+    SPPFSP,
+    SPPFSPDC,
+    SPPFSPRes,
     A2C2f,
     AConv,
     ADown,
@@ -72,6 +75,7 @@ from .block import (
 )
 from .fca import FCALayer, FCALayerResidual
 from .lska import DirectionalLSKA, LSKA, LSKARes
+from .strip_pool import StripPoolingAtrous, StripPoolingLite, StripPoolingLiteRes
 from .conv import (
     CBAM,
     ChannelAttention,
@@ -136,6 +140,9 @@ __all__ = (
     "SPPFFCARes",
     "SPPFLSKA",
     "SPPFLSKARes",
+    "SPPFSP",
+    "SPPFSPDC",
+    "SPPFSPRes",
     "A2C2f",
     "AConv",
     "ADown",
@@ -196,6 +203,9 @@ __all__ = (
     "DirectionalLSKA",
     "LSKA",
     "LSKARes",
+    "StripPoolingAtrous",
+    "StripPoolingLite",
+    "StripPoolingLiteRes",
     "Segment",
     "SpatialAttention",
     "TorchVision",
