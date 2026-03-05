@@ -84,4 +84,3 @@ class StripPoolingAtrous(nn.Module):
         """Apply strip pooling and atrous fusion while preserving shape."""
         y = self.pre(x)
         return self.fuse(self.dw_d2(y) + self.dw_d3(y))
-
