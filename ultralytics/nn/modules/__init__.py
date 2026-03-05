@@ -31,6 +31,7 @@ from .block import (
     SPPELAN,
     SPPF,
     SPPFFCA,
+    SPPFFCARes,
     A2C2f,
     AConv,
     ADown,
@@ -66,7 +67,7 @@ from .block import (
     SCDown,
     TorchVision,
 )
-from .fca import FCALayer
+from .fca import FCALayer, FCALayerResidual
 from .conv import (
     CBAM,
     ChannelAttention,
@@ -127,6 +128,7 @@ __all__ = (
     "SPPELAN",
     "SPPF",
     "SPPFFCA",
+    "SPPFFCARes",
     "A2C2f",
     "AConv",
     "ADown",
@@ -183,6 +185,7 @@ __all__ = (
     "ResNetLayer",
     "SCDown",
     "FCALayer",
+    "FCALayerResidual",
     "Segment",
     "SpatialAttention",
     "TorchVision",

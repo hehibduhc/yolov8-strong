@@ -5,6 +5,7 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 def get_freq_indices(method):
@@ -135,4 +136,37 @@ class FCALayer(nn.Module):
 
     def forward(self, x):
         """Apply FCA channel reweighting."""
+        return self.att(x)
+
+
+class MultiSpectralAttentionLayerResidual(MultiSpectralAttentionLayer):
+    """Residual FcaNet multi-spectral channel attention for weaker targets."""
+
+    def __init__(self, channel, dct_h, dct_w, reduction=32, freq_sel_method="low16", alpha=0.5):
+        super().__init__(channel, dct_h, dct_w, reduction=reduction, freq_sel_method=freq_sel_method)
+        self.alpha = alpha
+
+    def forward(self, x):
+        """Apply residual channel scaling to preserve weak target distributions."""
+        n, c, h, w = x.shape
+        x_pooled = x
+        if h != self.dct_h or w != self.dct_w:
+            x_pooled = F.adaptive_avg_pool2d(x, (self.dct_h, self.dct_w))
+        y = self.dct_layer(x_pooled)
+        y = self.fc(y).view(n, c, 1, 1)
+        scale = 1.0 + self.alpha * (y - 1.0)
+        return x * scale
+
+
+class FCALayerResidual(nn.Module):
+    """YOLO-friendly wrapper around residual FcaNet attention."""
+
+    def __init__(self, c, dct_h=7, dct_w=7, reduction=32, freq_sel_method="low16", alpha=0.5):
+        super().__init__()
+        self.att = MultiSpectralAttentionLayerResidual(
+            c, dct_h, dct_w, reduction=reduction, freq_sel_method=freq_sel_method, alpha=alpha
+        )
+
+    def forward(self, x):
+        """Apply residual FCA channel reweighting."""
         return self.att(x)
