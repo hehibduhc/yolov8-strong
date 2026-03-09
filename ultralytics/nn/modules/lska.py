@@ -85,4 +85,3 @@ class DirectionalLSKA(nn.Module):
         attn = self.pw(attn)
         y = x * attn
         return x + self.alpha * (y - x)
-

@@ -3,4 +3,4 @@ val: D:/BaiduNetdiskDownload/Crack Detection using Instance Segmentation in YOLO
 test: D:/BaiduNetdiskDownload/Crack Detection using Instance Segmentation in YOLOv8.v5i.yolov8/test/images
 
 nc: 1
-names: ['Cracks']
+names: ["Cracks"]
