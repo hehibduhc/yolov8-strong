@@ -76,6 +76,7 @@ from .block import (
 from .fca import FCALayer, FCALayerResidual
 from .lska import DirectionalLSKA, LSKA, LSKARes
 from .strip_pool import StripPoolingAtrous, StripPoolingLite, StripPoolingLiteRes
+from .replk_sppf import LargeKernelDW, RepLKBranch, SPPFRepLKFull, SPPFRepLKLite
 from .conv import (
     CBAM,
     ChannelAttention,
@@ -206,6 +207,10 @@ __all__ = (
     "StripPoolingAtrous",
     "StripPoolingLite",
     "StripPoolingLiteRes",
+    "LargeKernelDW",
+    "RepLKBranch",
+    "SPPFRepLKLite",
+    "SPPFRepLKFull",
     "Segment",
     "SpatialAttention",
     "TorchVision",
