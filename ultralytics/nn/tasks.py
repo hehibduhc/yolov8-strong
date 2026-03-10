@@ -10,6 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
+from spd_dcnv2 import SPD_DCNv2Down
 from ultralytics.nn.autobackend import check_class_names
 from ultralytics.nn.modules import (
     AIFI,
@@ -26,14 +27,9 @@ from ultralytics.nn.modules import (
     SPPF,
     SPPFDLSKA,
     SPPFFCA,
-    SPPFFCARes,
     SPPFLSKA,
-    SPPFLSKARes,
     SPPFSP,
     SPPFSPDC,
-    SPPFSPRes,
-    SPPFRepLKLite,
-    SPPFRepLKFull,
     A2C2f,
     AConv,
     ADown,
@@ -41,9 +37,9 @@ from ultralytics.nn.modules import (
     BottleneckCSP,
     C2f,
     C2fAttn,
-    C2fMDKA,
-    C2fDWR,
     C2fCIB,
+    C2fDWR,
+    C2fMDKA,
     C2fPSA,
     C3Ghost,
     C3k2,
@@ -63,6 +59,7 @@ from ultralytics.nn.modules import (
     GhostConv,
     HGBlock,
     HGStem,
+    HWDDown,
     ImagePoolingAttn,
     Index,
     LRPCHead,
@@ -75,14 +72,17 @@ from ultralytics.nn.modules import (
     RTDETRDecoder,
     SCDown,
     Segment,
+    SPPFFCARes,
+    SPPFLSKARes,
+    SPPFRepLKFull,
+    SPPFRepLKLite,
+    SPPFSPRes,
     TorchVision,
     WorldDetect,
     YOLOEDetect,
     YOLOESegment,
     v10Detect,
-    HWDDown,
 )
-from spd_dcnv2 import SPD_DCNv2Down
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
 from ultralytics.utils.loss import (
