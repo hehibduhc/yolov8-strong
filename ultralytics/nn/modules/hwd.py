@@ -44,3 +44,21 @@ class HWDDown(nn.Module):
 
     def forward(self, x):
         return self.cv(self.haar(x))
+
+
+class ConvHWDDown(nn.Module):
+    """Parallel downsampling block with Conv main branch and HWD auxiliary branch."""
+
+    def __init__(self, c1, c2, fuse="concat"):
+        super().__init__()
+        self.fuse = fuse
+        self.branch1 = Conv(c1, c2, k=3, s=2)
+        self.branch2 = HWDDown(c1, c2)
+        self.cv = Conv(2 * c2, c2, k=1, s=1) if fuse == "concat" else nn.Identity()
+
+    def forward(self, x):
+        y1 = self.branch1(x)
+        y2 = self.branch2(x)
+        if self.fuse == "add":
+            return y1 + y2
+        return self.cv(torch.cat((y1, y2), dim=1))

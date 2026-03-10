@@ -77,7 +77,7 @@ from .fca import FCALayer, FCALayerResidual
 from .lska import DirectionalLSKA, LSKA, LSKARes
 from .strip_pool import StripPoolingAtrous, StripPoolingLite, StripPoolingLiteRes
 from .replk_sppf import LargeKernelDW, RepLKBranch, SPPFRepLKFull, SPPFRepLKLite
-from .hwd import HaarTransform2D, HWDDown
+from .hwd import ConvHWDDown, HaarTransform2D, HWDDown
 from .conv import (
     CBAM,
     ChannelAttention,
@@ -214,6 +214,7 @@ __all__ = (
     "SPPFRepLKFull",
     "HaarTransform2D",
     "HWDDown",
+    "ConvHWDDown",
     "Segment",
     "SpatialAttention",
     "TorchVision",

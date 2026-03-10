@@ -81,6 +81,7 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     v10Detect,
     HWDDown,
+    ConvHWDDown,
 )
 from spd_dcnv2 import SPD_DCNv2Down
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, YAML, colorstr, emojis
@@ -1579,6 +1580,7 @@ def parse_model(d, ch, verbose=True):
             SCDown,
             SPD_DCNv2Down,
             HWDDown,
+            ConvHWDDown,
             C2fCIB,
             A2C2f,
         }
