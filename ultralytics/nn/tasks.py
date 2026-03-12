@@ -38,6 +38,7 @@ from ultralytics.nn.modules import (
     AConv,
     ADown,
     Bottleneck,
+    BiFPNBlock,
     BottleneckCSP,
     C2f,
     C2fAttn,
@@ -1616,10 +1617,13 @@ def parse_model(d, ch, verbose=True):
         )  # get module
         for j, a in enumerate(args):
             if isinstance(a, str):
-                with contextlib.suppress(ValueError):
-                    args[j] = locals()[a] if a in locals() else ast.literal_eval(a)
+                with contextlib.suppress(ValueError, SyntaxError):
+                    args[j] = locals()[a] if a in locals() else d[a] if a in d else ast.literal_eval(a)
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
-        if m in base_modules:
+        if m is BiFPNBlock:
+            c2 = make_divisible(min(args[0], max_channels) * width, 8)
+            args = [[ch[x] for x in f], c2, *args[1:]]
+        elif m in base_modules:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
                 c2 = make_divisible(min(c2, max_channels) * width, 8)
@@ -1674,6 +1678,8 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]
+            if m is Index and isinstance(f, int) and f < len(layers) and getattr(layers[f], "type", "").endswith("BiFPNBlock"):
+                c2 = ch[f]
             args = [*args[1:]]
         else:
             c2 = ch[f]

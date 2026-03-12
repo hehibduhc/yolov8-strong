@@ -40,6 +40,8 @@ __all__ = (
     "ADown",
     "Attention",
     "BNContrastiveHead",
+    "BiFPNBlock",
+    "BiFPNLayer3",
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
@@ -68,6 +70,7 @@ __all__ = (
     "ResNetLayer",
     "SCDown",
     "TorchVision",
+    "WeightedFusion",
 )
 
 
@@ -1546,6 +1549,107 @@ class CBFuse(nn.Module):
         target_size = xs[-1].shape[2:]
         res = [F.interpolate(x[self.idx[i]], size=target_size, mode="nearest") for i, x in enumerate(xs[:-1])]
         return torch.sum(torch.stack(res + xs[-1:]), dim=0)
+
+
+class WeightedFusion(nn.Module):
+    """Fast normalized fusion with learnable non-negative scalar weights."""
+
+    def __init__(self, n_inputs: int, eps: float = 1e-4):
+        """Initialize fusion weights.
+
+        Args:
+            n_inputs (int): Number of tensors to fuse.
+            eps (float): Small epsilon for numerical stability.
+        """
+        super().__init__()
+        self.eps = eps
+        self.w = nn.Parameter(torch.ones(n_inputs, dtype=torch.float32), requires_grad=True)
+
+    def forward(self, xs: list[torch.Tensor] | tuple[torch.Tensor, ...]) -> torch.Tensor:
+        """Fuse same-shape tensors with fast normalized weighted sum."""
+        if len(xs) != self.w.numel():
+            raise ValueError(f"Expected {self.w.numel()} inputs, but got {len(xs)}.")
+        w = F.relu(self.w)
+        weight = w / (w.sum() + self.eps)
+        return sum(weight[i] * x for i, x in enumerate(xs))
+
+
+class BiFPNLayer3(nn.Module):
+    """Single 3-scale BiFPN layer for P3/P4/P5 features."""
+
+    def __init__(self, c: int, eps: float = 1e-4, use_dwconv: bool = False):
+        """Initialize one bidirectional fusion layer.
+
+        Args:
+            c (int): Unified channel width.
+            eps (float): Epsilon for fast normalized fusion.
+            use_dwconv (bool): Whether to use depthwise conv blocks.
+        """
+        super().__init__()
+        conv = DWConv if use_dwconv else Conv
+        self.fuse_p4_td = WeightedFusion(2, eps)
+        self.fuse_p3_out = WeightedFusion(2, eps)
+        self.fuse_p4_out = WeightedFusion(3, eps)
+        self.fuse_p5_out = WeightedFusion(2, eps)
+
+        self.cv_p4_td = conv(c, c, 3, 1)
+        self.cv_p3_out = conv(c, c, 3, 1)
+        self.cv_p4_out = conv(c, c, 3, 1)
+        self.cv_p5_out = conv(c, c, 3, 1)
+
+        self.down_p3 = conv(c, c, 3, 2)
+        self.down_p4 = conv(c, c, 3, 2)
+
+    def forward(self, x: list[torch.Tensor] | tuple[torch.Tensor, ...]) -> list[torch.Tensor]:
+        """Run top-down and bottom-up BiFPN fusion on [P3, P4, P5]."""
+        p3, p4, p5 = x
+
+        p5_up = F.interpolate(p5, size=p4.shape[-2:], mode="nearest")
+        p4_td = self.cv_p4_td(self.fuse_p4_td((p4, p5_up)))
+
+        p4_td_up = F.interpolate(p4_td, size=p3.shape[-2:], mode="nearest")
+        p3_out = self.cv_p3_out(self.fuse_p3_out((p3, p4_td_up)))
+
+        p3_down = self.down_p3(p3_out)
+        if p3_down.shape[-2:] != p4.shape[-2:]:
+            p3_down = F.interpolate(p3_down, size=p4.shape[-2:], mode="nearest")
+        p4_out = self.cv_p4_out(self.fuse_p4_out((p4, p4_td, p3_down)))
+
+        p4_down = self.down_p4(p4_out)
+        if p4_down.shape[-2:] != p5.shape[-2:]:
+            p4_down = F.interpolate(p4_down, size=p5.shape[-2:], mode="nearest")
+        p5_out = self.cv_p5_out(self.fuse_p5_out((p5, p4_down)))
+
+        return [p3_out, p4_out, p5_out]
+
+
+class BiFPNBlock(nn.Module):
+    """Stacked lightweight 3-scale BiFPN block with channel projection."""
+
+    def __init__(self, c1: list[int] | tuple[int, int, int], c2: int, n: int = 1, eps: float = 1e-4, use_dwconv: bool = False):
+        """Initialize BiFPN block.
+
+        Args:
+            c1 (list[int] | tuple[int, int, int]): Input channels [P3, P4, P5].
+            c2 (int): Unified BiFPN channel width.
+            n (int): Number of stacked BiFPN layers.
+            eps (float): Epsilon for fast normalized fusion.
+            use_dwconv (bool): Whether to use depthwise conv in BiFPN layers.
+        """
+        super().__init__()
+        if len(c1) != 3:
+            raise ValueError(f"BiFPNBlock expects 3 input scales [P3, P4, P5], but got {len(c1)}.")
+        self.proj = nn.ModuleList(Conv(cin, c2, 1, 1) for cin in c1)
+        self.layers = nn.ModuleList(BiFPNLayer3(c2, eps=eps, use_dwconv=use_dwconv) for _ in range(n))
+
+    def forward(self, x: list[torch.Tensor] | tuple[torch.Tensor, ...]) -> list[torch.Tensor]:
+        """Project channels then apply stacked 3-scale BiFPN layers."""
+        if len(x) != 3:
+            raise ValueError(f"BiFPNBlock expects 3 inputs [P3, P4, P5], but got {len(x)}.")
+        p3, p4, p5 = (proj(xi) for proj, xi in zip(self.proj, x))
+        for layer in self.layers:
+            p3, p4, p5 = layer((p3, p4, p5))
+        return [p3, p4, p5]
 
 
 class C3f(nn.Module):
