@@ -38,6 +38,7 @@ from ultralytics.nn.modules import (
     AConv,
     ADown,
     Bottleneck,
+    BiFPNBlock,
     BottleneckCSP,
     C2f,
     C2fAttn,
@@ -1641,6 +1642,9 @@ def parse_model(d, ch, verbose=True):
                     args.extend((True, 1.2))
             if m is C2fCIB:
                 legacy = False
+        elif m is BiFPNBlock:
+            c2 = make_divisible(min(args[0], max_channels) * width, 8)
+            args = [[ch[x] for x in f], c2, *args[1:]]
         elif m is AIFI:
             args = [ch[f], *args]
         elif m in frozenset({HGStem, HGBlock}):
