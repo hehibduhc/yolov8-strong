@@ -43,6 +43,8 @@ from .block import (
     ADown,
     Attention,
     BNContrastiveHead,
+    BiFPNBlock,
+    BiFPNLayer3,
     Bottleneck,
     BottleneckCSP,
     C2f,
@@ -72,6 +74,7 @@ from .block import (
     ResNetLayer,
     SCDown,
     TorchVision,
+    WeightedFusion,
 )
 from .fca import FCALayer, FCALayerResidual
 from .lska import DirectionalLSKA, LSKA, LSKARes
@@ -150,6 +153,8 @@ __all__ = (
     "ADown",
     "Attention",
     "BNContrastiveHead",
+    "BiFPNBlock",
+    "BiFPNLayer3",
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
@@ -218,6 +223,7 @@ __all__ = (
     "Segment",
     "SpatialAttention",
     "TorchVision",
+    "WeightedFusion",
     "TransformerBlock",
     "TransformerEncoderLayer",
     "TransformerLayer",
