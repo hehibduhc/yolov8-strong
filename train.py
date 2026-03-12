@@ -5,7 +5,7 @@ from ultralytics import YOLO
 def main():
     # 1. 加载YOLO8-seg模型（轻量版n、标准版s、大模型l/x可选）
     # 方式1：先加载yaml配置再加载预训练权重（推荐，可自定义网络）
-    model = YOLO('yolov8-seg-hwd-backbone-4down.yaml').load('yolov8n-seg.pt')  
+    model = YOLO('yolov8-seg-bifpn.yaml').load('yolov8n-seg.pt')  
     # 方式2：直接加载预训练权重（更简洁，无需手动指定yaml）
     # model = YOLO('yolo11n-seg.pt')
 
