@@ -54,8 +54,7 @@ class GramMatrix(nn.Module):
 
 
 class View(nn.Module):
-    """Reshape the input into different size, an inplace operator, support SelfParallel mode.
-    """
+    """Reshape the input into different size, an inplace operator, support SelfParallel mode."""
 
     def __init__(self, *args):
         super().__init__()

@@ -60,8 +60,7 @@ class LSKA(nn.Module):
 
 
 class LSKARes(nn.Module):
-    """残差安全版 LSKA： out = x * (1 + alpha * attn) 修改理由：避免直接 x * attn 对弱裂缝通道造成过度抑制。.
-    """
+    """残差安全版 LSKA： out = x * (1 + alpha * attn) 修改理由：避免直接 x * attn 对弱裂缝通道造成过度抑制。."""
 
     def __init__(self, c, k=23, d=3, alpha=0.5):
         super().__init__()
@@ -77,8 +76,7 @@ class LSKARes(nn.Module):
 
 
 class DirectionalLSKA(nn.Module):
-    """裂缝导向方向版 LSKA： 将横向与纵向响应显式分开建模，再用轻量门控融合。 修改理由：裂缝是细长、方向性强的结构，显式方向建模比单一路径更贴合任务。.
-    """
+    """裂缝导向方向版 LSKA： 将横向与纵向响应显式分开建模，再用轻量门控融合。 修改理由：裂缝是细长、方向性强的结构，显式方向建模比单一路径更贴合任务。."""
 
     def __init__(self, c, k=23, d=3, alpha=0.5):
         super().__init__()
