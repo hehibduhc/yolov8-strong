@@ -35,7 +35,6 @@ from ultralytics.nn.modules import (
     ADown,
     BiFPNBlock,
     Bottleneck,
-    BiFPNBlock,
     BottleneckCSP,
     C2f,
     C2fAttn,
