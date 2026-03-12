@@ -1639,7 +1639,9 @@ class BiFPNLayer3(nn.Module):
 class BiFPNBlock(nn.Module):
     """Stacked lightweight 3-scale BiFPN block with channel projection."""
 
-    def __init__(self, c1: list[int] | tuple[int, int, int], c2: int, n: int = 1, eps: float = 1e-4, use_dwconv: bool = False):
+    def __init__(
+        self, c1: list[int] | tuple[int, int, int], c2: int, n: int = 1, eps: float = 1e-4, use_dwconv: bool = False
+    ):
         """Initialize BiFPN block.
 
         Args:

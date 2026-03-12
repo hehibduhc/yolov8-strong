@@ -35,7 +35,6 @@ from ultralytics.nn.modules import (
     ADown,
     BiFPNBlock,
     Bottleneck,
-    BiFPNBlock,
     BottleneckCSP,
     C2f,
     C2fAttn,
@@ -1683,7 +1682,12 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset({TorchVision, Index}):
             c2 = args[0]
             c1 = ch[f]
-            if m is Index and isinstance(f, int) and f < len(layers) and getattr(layers[f], "type", "").endswith("BiFPNBlock"):
+            if (
+                m is Index
+                and isinstance(f, int)
+                and f < len(layers)
+                and getattr(layers[f], "type", "").endswith("BiFPNBlock")
+            ):
                 c2 = ch[f]
             args = [*args[1:]]
         else:
