@@ -64,6 +64,12 @@ __all__ = (
     "MDKABottleneck",
     "MDKAConv",
     "Proto",
+    "GhostProjConv",
+    "MCTA",
+    "MSTA",
+    "MCSTA",
+    "P2P3Fuse",
+    "RawRefineFuse",
     "RepC3",
     "RepNCSPELAN4",
     "RepVGGDW",
@@ -122,6 +128,158 @@ class Proto(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through layers using an upsampled input image."""
         return self.cv3(self.cv2(self.upsample(self.cv1(x))))
+
+
+class GhostProjConv(nn.Module):
+    """Ghost-style projection used for lightweight Q/K/V projections."""
+
+    def __init__(self, c1: int, c2: int, k: int = 1, s: int = 1, ratio: int = 2):
+        """Initialize intrinsic + cheap-operation ghost projection conv."""
+        super().__init__()
+        c_ = max(1, c2 // ratio)
+        self.primary = nn.Sequential(
+            nn.Conv2d(c1, c_, k, s, autopad(k), bias=False),
+            nn.BatchNorm2d(c_),
+        )
+        self.cheap = nn.Sequential(
+            nn.Conv2d(c_, c2 - c_, 3, 1, 1, groups=c_, bias=False),
+            nn.BatchNorm2d(c2 - c_),
+        )
+        self.c2 = c2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply ghost projection and keep output channel count exact."""
+        y = self.primary(x)
+        return torch.cat((y, self.cheap(y)), 1)[:, : self.c2]
+
+
+class MCTA(nn.Module):
+    """Multi-dimensional channel trans-attention (channel-wise attention)."""
+
+    def __init__(self, c1: int, c2: int | None = None):
+        """Initialize channel-attention branch with residual normalization."""
+        super().__init__()
+        c2 = c1 if c2 is None else c2
+        self.q_proj = GhostProjConv(c1, c2)
+        self.k_proj = GhostProjConv(c1, c2)
+        self.v_proj = GhostProjConv(c1, c2)
+        self.out_proj = GhostProjConv(c2, c2)
+        self.norm = LayerNorm2d(c2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute channel-channel attention with spatial dimensions as context."""
+        b, c, h, w = x.shape
+        q = self.q_proj(x).reshape(b, c, h * w)
+        k = self.k_proj(x).reshape(b, c, h * w)
+        v = self.v_proj(x).reshape(b, c, h * w)
+
+        attn = (q @ k.transpose(-1, -2)) * (h * w) ** -0.5
+        attn = attn.softmax(dim=-1)
+        y = (attn @ v).reshape(b, c, h, w)
+        y = self.out_proj(y)
+        return self.norm(x + y)
+
+
+class MSTA(nn.Module):
+    """Multi-dimensional spatial trans-attention using block-wise spatial attention."""
+
+    def __init__(self, c1: int, c2: int | None = None, block_size: int = 4):
+        """Initialize block-attention branch with local windowed attention."""
+        super().__init__()
+        c2 = c1 if c2 is None else c2
+        self.block_size = block_size
+        self.q_proj = GhostProjConv(c1, c2)
+        self.k_proj = GhostProjConv(c1, c2)
+        self.v_proj = GhostProjConv(c1, c2)
+        self.out_proj = GhostProjConv(c2, c2)
+        self.norm = LayerNorm2d(c2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply non-overlapping block-wise spatial attention and residual normalization."""
+        b, c, h, w = x.shape
+        bs = self.block_size
+        pad_h = (bs - h % bs) % bs
+        pad_w = (bs - w % bs) % bs
+
+        x_pad = F.pad(x, (0, pad_w, 0, pad_h)) if (pad_h or pad_w) else x
+        _, _, hp, wp = x_pad.shape
+        nh, nw = hp // bs, wp // bs
+
+        q = self.q_proj(x_pad)
+        k = self.k_proj(x_pad)
+        v = self.v_proj(x_pad)
+
+        def unfold_blocks(t: torch.Tensor) -> torch.Tensor:
+            return t.view(b, c, nh, bs, nw, bs).permute(0, 2, 4, 3, 5, 1).reshape(b * nh * nw, bs * bs, c)
+
+        q_b = unfold_blocks(q)
+        k_b = unfold_blocks(k)
+        v_b = unfold_blocks(v)
+
+        attn = (q_b @ k_b.transpose(-1, -2)) * (c**-0.5)
+        attn = attn.softmax(dim=-1)
+        y_b = attn @ v_b
+
+        y = y_b.view(b, nh, nw, bs, bs, c).permute(0, 5, 1, 3, 2, 4).reshape(b, c, hp, wp)
+        y = y[..., :h, :w]
+        y = self.out_proj(y)
+        return self.norm(x + y)
+
+
+class MCSTA(nn.Module):
+    """MCSTA block: MCTA followed by MSTA."""
+
+    def __init__(self, c1: int, c2: int | None = None, block_size: int = 4):
+        """Initialize sequential channel-spatial trans-attention."""
+        super().__init__()
+        c2 = c1 if c2 is None else c2
+        self.mcta = MCTA(c1, c2)
+        self.msta = MSTA(c2, c2, block_size=block_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply channel then block-wise spatial attention with internal residuals."""
+        return self.msta(self.mcta(x))
+
+
+class P2P3Fuse(nn.Module):
+    """Fuse higher-resolution P2 feature into P3 while preserving P3 output shape."""
+
+    def __init__(self, channels: list[int], c2: int):
+        """Initialize P2-to-P3 fusion with alignment and lightweight refinement."""
+        super().__init__()
+        c2_in, c3_in = channels
+        self.p2_align = Conv(c2_in, c2, 3, 2)
+        self.p3_align = Conv(c3_in, c2, 1, 1)
+        self.fuse = Conv(c2 * 2, c2, 3, 1)
+
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        """Downsample P2, align channels, and fuse with P3 by concat+conv."""
+        p2, p3 = x
+        p2 = self.p2_align(p2)
+        if p2.shape[-2:] != p3.shape[-2:]:
+            p2 = F.interpolate(p2, size=p3.shape[-2:], mode="nearest")
+        p3 = self.p3_align(p3)
+        return self.fuse(torch.cat((p3, p2), 1))
+
+
+class RawRefineFuse(nn.Module):
+    """Fuse same-level raw backbone feature into neck feature for detail recovery."""
+
+    def __init__(self, channels: list[int], c2: int):
+        """Initialize residual-style neck/raw fusion."""
+        super().__init__()
+        c_neck, c_raw = channels
+        self.neck_align = Conv(c_neck, c2, 1, 1)
+        self.raw_align = Conv(c_raw, c2, 1, 1)
+        self.refine = Conv(c2, c2, 3, 1)
+
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        """Align and merge neck + backbone raw features, then refine."""
+        neck, raw = x
+        if raw.shape[-2:] != neck.shape[-2:]:
+            raw = F.interpolate(raw, size=neck.shape[-2:], mode="nearest")
+        y = self.neck_align(neck) + self.raw_align(raw)
+        return self.refine(y)
 
 
 class HGStem(nn.Module):
