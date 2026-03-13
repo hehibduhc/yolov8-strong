@@ -31,6 +31,7 @@ from ultralytics.nn.modules import (
     SPPFSP,
     SPPFSPDC,
     A2C2f,
+    AGMBlock,
     AConv,
     ADown,
     BiFPNBlock,
@@ -1585,6 +1586,7 @@ def parse_model(d, ch, verbose=True):
             C2fCIB,
             A2C2f,
             BiFPNBlock,
+            AGMBlock,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments

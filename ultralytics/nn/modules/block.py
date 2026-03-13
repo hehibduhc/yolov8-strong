@@ -13,7 +13,7 @@ from .conv import Conv, DWConv, GhostConv, LightConv, RepConv, autopad
 from .fca import FCALayer, FCALayerResidual
 from .lska import LSKA, DirectionalLSKA, LSKARes
 from .strip_pool import StripPoolingAtrous, StripPoolingLite, StripPoolingLiteRes
-from .transformer import TransformerBlock
+from .transformer import LayerNorm2d, TransformerBlock
 
 __all__ = (
     "C1",
@@ -39,6 +39,7 @@ __all__ = (
     "BNContrastiveHead",
     "BiFPNBlock",
     "BiFPNLayer3",
+    "AGMBlock",
     "Bottleneck",
     "BottleneckCSP",
     "C2f",
@@ -57,6 +58,7 @@ __all__ = (
     "GhostBottleneck",
     "HGBlock",
     "HGStem",
+    "CMHA",
     "ImagePoolingAttn",
     "MDKABottleneck",
     "MDKAConv",
@@ -66,6 +68,7 @@ __all__ = (
     "RepVGGDW",
     "ResNetLayer",
     "SCDown",
+    "GEBlock",
     "SPPFFCARes",
     "SPPFLSKARes",
     "SPPFSPRes",
@@ -2498,6 +2501,82 @@ class SwiGLUFFN(nn.Module):
         x1, x2 = x12.chunk(2, dim=-1)
         hidden = F.silu(x1) * x2
         return self.w3(hidden)
+
+
+class GEBlock(nn.Module):
+    """Gated enhancement block with shared MLP over GAP and GMP branches."""
+
+    def __init__(self, c1: int, reduction: int = 16):
+        """Initialize GEBlock with shared channel MLP and sigmoid gating."""
+        super().__init__()
+        hidden = max(c1 // reduction, 1)
+        self.mlp = nn.Sequential(
+            nn.Conv2d(c1, hidden, kernel_size=1, bias=True),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(hidden, c1, kernel_size=1, bias=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Recalibrate channels with pooled context and preserve input shape."""
+        gap = F.adaptive_avg_pool2d(x, 1)
+        gmp = F.adaptive_max_pool2d(x, 1)
+        w = torch.sigmoid(self.mlp(gap) + self.mlp(gmp))
+        return x * w
+
+
+class CMHA(nn.Module):
+    """Context-aware multi-head attention with multi-scale local pre-encoding."""
+
+    def __init__(self, c1: int, num_heads: int = 4):
+        """Initialize CMHA with depthwise local context branches and MHSA projection."""
+        super().__init__()
+        if c1 % num_heads != 0:
+            raise ValueError(f"CMHA expects channels divisible by num_heads, got c1={c1}, heads={num_heads}")
+
+        self.num_heads = num_heads
+        self.head_dim = c1 // num_heads
+        self.scale = self.head_dim**-0.5
+
+        self.local3 = nn.Conv2d(c1, c1, kernel_size=3, stride=1, padding=1, groups=c1, bias=False)
+        self.local5 = nn.Conv2d(c1, c1, kernel_size=5, stride=1, padding=2, groups=c1, bias=False)
+        self.context_proj = nn.Conv2d(c1 * 2, c1, kernel_size=1, stride=1, padding=0, bias=False)
+
+        self.qkv = nn.Conv2d(c1, c1 * 3, kernel_size=1, stride=1, padding=0, bias=False)
+        self.proj = nn.Conv2d(c1, c1, kernel_size=1, stride=1, padding=0, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply 2D-equivalent MHSA while keeping spatial resolution and channels unchanged."""
+        b, c, h, w = x.shape
+        context = self.context_proj(torch.cat((self.local3(x), self.local5(x)), dim=1))
+
+        q, k, v = self.qkv(context).chunk(3, dim=1)
+        q = q.view(b, self.num_heads, self.head_dim, h * w).transpose(-2, -1)
+        k = k.view(b, self.num_heads, self.head_dim, h * w)
+        v = v.view(b, self.num_heads, self.head_dim, h * w).transpose(-2, -1)
+
+        attn = (q @ k) * self.scale
+        attn = attn.softmax(dim=-1)
+        y = attn @ v
+
+        y = y.transpose(-2, -1).reshape(b, c, h, w)
+        return self.proj(y)
+
+
+class AGMBlock(nn.Module):
+    """AGM block composed of LayerNorm2d, CMHA and GEBlock."""
+
+    def __init__(self, c1: int, num_heads: int = 4, reduction: int = 16):
+        """Initialize AGM block for single-point neck enhancement with shape-preserving ops."""
+        super().__init__()
+        self.norm = LayerNorm2d(c1)
+        self.cmha = CMHA(c1, num_heads=num_heads)
+        self.ge = GEBlock(c1, reduction=reduction)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply CMHA and GE recalibration with residual inside AGM."""
+        f_cmha = self.cmha(self.norm(x))
+        f_ge = self.ge(f_cmha)
+        return f_ge + f_cmha
 
 
 class Residual(nn.Module):
