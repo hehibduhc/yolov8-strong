@@ -77,6 +77,8 @@ __all__ = (
     "RepVGGDW",
     "ResNetLayer",
     "SCDown",
+    "SLPALite",
+    "MSFEMLite",
     "SPPFFCARes",
     "SPPFLSKARes",
     "SPPFSPRes",
@@ -84,6 +86,65 @@ __all__ = (
     "TorchVision",
     "WeightedFusion",
 )
+
+
+class SLPALite(nn.Module):
+    """Lightweight spatial Laplacian pyramid attention for YOLO feature enhancement."""
+
+    def __init__(self, c1: int, c2: int, rates: tuple[int, ...] = (1, 2, 3)):
+        """Initialize a lightweight multi-dilation spatial attention module."""
+        super().__init__()
+        self.proj = Conv(c1, c2, k=1, s=1) if c1 != c2 else nn.Identity()
+        self.branches = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(2, 1, kernel_size=3, padding=r, dilation=r, bias=False),
+                    nn.BatchNorm2d(1),
+                    nn.SiLU(inplace=True),
+                )
+                for r in rates
+            ]
+        )
+        self.fuse = nn.Conv2d(len(rates), 1, kernel_size=1, bias=True)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply multi-dilation spatial attention and keep shape/channels unchanged."""
+        x = self.proj(x)
+        avg = x.mean(dim=1, keepdim=True)
+        mx = x.max(dim=1, keepdim=True)[0]
+        z = torch.cat((avg, mx), dim=1)
+        ms = self.act(self.fuse(torch.cat([branch(z) for branch in self.branches], dim=1)))
+        return x * ms
+
+
+class MSFEMLite(nn.Module):
+    """Lite multi-scale feature enhancement module for top-level neck input."""
+
+    def __init__(self, c1: int, c2: int, rates: tuple[int, ...] = (1, 2, 3, 4)):
+        """Initialize grouped multi-dilation and global-context branches."""
+        super().__init__()
+        n = len(rates)
+        if c1 % n != 0:
+            raise ValueError(f"MSFEMLite expects c1 divisible by number of rates, got c1={c1}, rates={rates}")
+        self.proj = Conv(c1, c2, k=1, s=1) if c1 != c2 else nn.Identity()
+        c = c2 // n
+        if c2 % n != 0:
+            raise ValueError(f"MSFEMLite expects c2 divisible by number of rates, got c2={c2}, rates={rates}")
+        self.branches = nn.ModuleList(
+            [Conv(c, c, k=3, d=r) for r in rates]
+        )
+        self.global_conv = Conv(c2, c2, k=1)
+        self.fuse = Conv(c2 * 3, c2, k=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Enhance the top-level feature while preserving tensor shape and channels."""
+        x = self.proj(x)
+        xs = torch.chunk(x, len(self.branches), dim=1)
+        ms = torch.cat([branch(xi) for branch, xi in zip(self.branches, xs)], dim=1)
+        gp = self.global_conv(F.adaptive_avg_pool2d(x, output_size=1))
+        gp = F.interpolate(gp, size=x.shape[-2:], mode="nearest")
+        return self.fuse(torch.cat((x, ms, gp), dim=1))
 
 
 class DFL(nn.Module):
