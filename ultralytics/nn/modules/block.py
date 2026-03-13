@@ -69,6 +69,8 @@ __all__ = (
     "MSTA",
     "MCSTA",
     "P2P3Fuse",
+    "AFPBlock",
+    "CIEPool",
     "RawRefineFuse",
     "RepC3",
     "RepNCSPELAN4",
@@ -78,6 +80,7 @@ __all__ = (
     "SPPFFCARes",
     "SPPFLSKARes",
     "SPPFSPRes",
+    "SECBAMLite",
     "TorchVision",
     "WeightedFusion",
 )
@@ -241,6 +244,92 @@ class MCSTA(nn.Module):
         return self.msta(self.mcta(x))
 
 
+class CIEPool(nn.Module):
+    """Minimal context-information-enhancement pooling for neck fusion refinement."""
+
+    def __init__(self, c1: int, c2: int, dilations: tuple[int, int, int] = (1, 3, 5)):
+        """Initialize CIE-Pool with multi-dilation context, pooling context and weighted fusion."""
+        super().__init__()
+        self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        self.dilated = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(c2, c2, 3, 1, padding=d, dilation=d, groups=c2, bias=False),
+                    nn.BatchNorm2d(c2),
+                    nn.SiLU(),
+                )
+                for d in dilations
+            ]
+        )
+        self.xa_fuse = Conv(c2 * len(dilations), c2, 1, 1)
+        self.pool3 = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+        self.pool5 = nn.AvgPool2d(kernel_size=5, stride=1, padding=2)
+        self.pool13 = nn.AvgPool2d(kernel_size=13, stride=1, padding=6)
+        self.xb_fuse = Conv(c2 * 3, c2, 1, 1)
+        self.weights = nn.Parameter(torch.zeros(3))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply Xa/Xb/Xc composition and learnable weighted aggregation."""
+        x = self.proj(x)
+        xa = self.xa_fuse(torch.cat([branch(x) for branch in self.dilated], 1))
+        xb = self.xb_fuse(torch.cat((self.pool3(xa), self.pool5(xa), self.pool13(xa)), 1))
+        xc = xa * xb
+        w = self.weights.softmax(0)
+        return w[0] * xa + w[1] * xb + w[2] * xc
+
+
+class SECBAMLite(nn.Module):
+    """Lightweight SE+CBAM-style attention with residual stabilization."""
+
+    def __init__(self, c1: int, c2: int, reduction: int = 16):
+        """Initialize channel (1x1 conv MLP) and spatial (stacked 3x3 conv) attention."""
+        super().__init__()
+        self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        hidden = max(c2 // reduction, 8)
+        self.cam = nn.Sequential(
+            nn.Conv2d(c2, hidden, 1, bias=False),
+            nn.SiLU(),
+            nn.Conv2d(hidden, c2, 1, bias=False),
+        )
+        self.sam = nn.Sequential(
+            nn.Conv2d(2, 1, 3, padding=1, bias=False),
+            nn.SiLU(),
+            nn.Conv2d(1, 1, 3, padding=1, bias=False),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply CAM then SAM and return residual-refined feature."""
+        x = self.proj(x)
+        y = x
+        ca = self.cam(F.adaptive_avg_pool2d(y, 1)).sigmoid()
+        y = y * ca
+        sa = self.sam(torch.cat((y.mean(1, keepdim=True), y.max(1, keepdim=True)[0]), 1)).sigmoid()
+        y = y * sa
+        return x + y
+
+
+class AFPBlock(nn.Module):
+    """Adaptive feature processing with multi-depth paths and learnable fusion."""
+
+    def __init__(self, c1: int, c2: int):
+        """Initialize AFP block as minimal equivalent engineering implementation."""
+        super().__init__()
+        self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        self.path_id = nn.Identity()
+        self.path_1 = Conv(c2, c2, 3, 1)
+        self.path_2 = nn.Sequential(Conv(c2, c2, 3, 1), Conv(c2, c2, 3, 1))
+        self.weights = nn.Parameter(torch.zeros(3))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Fuse shallow, medium, and deeper responses by softmax-normalized weights."""
+        x = self.proj(x)
+        p0 = self.path_id(x)
+        p1 = self.path_1(x)
+        p2 = self.path_2(x)
+        w = self.weights.softmax(0)
+        return w[0] * p0 + w[1] * p1 + w[2] * p2
+
+
 class P2P3Fuse(nn.Module):
     """Fuse higher-resolution P2 feature into P3 while preserving P3 output shape."""
 
@@ -250,7 +339,7 @@ class P2P3Fuse(nn.Module):
         c2_in, c3_in = channels
         self.p2_align = Conv(c2_in, c2, 3, 2)
         self.p3_align = Conv(c3_in, c2, 1, 1)
-        self.fuse = Conv(c2 * 2, c2, 3, 1)
+        self.fuse = nn.Sequential(Conv(c2 * 2, c2, 3, 1), Conv(c2, c2, 3, 1))
 
     def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
         """Downsample P2, align channels, and fuse with P3 by concat+conv."""
