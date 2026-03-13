@@ -55,6 +55,12 @@ from ultralytics.nn.modules import (
     ConvHWDDown,
     ConvTranspose,
     Detect,
+    MCSTA,
+    AFPBlock,
+    CIEPool,
+    P2P3Fuse,
+    RawRefineFuse,
+    SECBAMLite,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -74,6 +80,8 @@ from ultralytics.nn.modules import (
     ResNetLayer,
     RTDETRDecoder,
     SCDown,
+    SLPALite,
+    MSFEMLite,
     Segment,
     SPPFFCARes,
     SPPFLSKARes,
@@ -1580,13 +1588,19 @@ def parse_model(d, ch, verbose=True):
             RepC3,
             PSA,
             SCDown,
+            SLPALite,
+            MSFEMLite,
             SPD_DCNv2Down,
             HWDDown,
             ConvHWDDown,
             C2fCIB,
             A2C2f,
             BiFPNBlock,
+            MCSTA,
             AGMBlock,
+            AFPBlock,
+            CIEPool,
+            SECBAMLite,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
@@ -1624,6 +1638,9 @@ def parse_model(d, ch, verbose=True):
                     args[j] = locals()[a] if a in locals() else d[a] if a in d else ast.literal_eval(a)
         n = n_ = max(round(n * depth), 1) if n > 1 else n  # depth gain
         if m is BiFPNBlock:
+            c2 = make_divisible(min(args[0], max_channels) * width, 8)
+            args = [[ch[x] for x in f], c2, *args[1:]]
+        elif m in frozenset({P2P3Fuse, RawRefineFuse}):
             c2 = make_divisible(min(args[0], max_channels) * width, 8)
             args = [[ch[x] for x in f], c2, *args[1:]]
         elif m in base_modules:

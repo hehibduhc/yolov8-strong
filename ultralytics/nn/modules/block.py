@@ -64,17 +64,87 @@ __all__ = (
     "MDKABottleneck",
     "MDKAConv",
     "Proto",
+    "GhostProjConv",
+    "MCTA",
+    "MSTA",
+    "MCSTA",
+    "P2P3Fuse",
+    "AFPBlock",
+    "CIEPool",
+    "RawRefineFuse",
     "RepC3",
     "RepNCSPELAN4",
     "RepVGGDW",
     "ResNetLayer",
     "SCDown",
+    "SLPALite",
+    "MSFEMLite",
     "SPPFFCARes",
     "SPPFLSKARes",
     "SPPFSPRes",
+    "SECBAMLite",
     "TorchVision",
     "WeightedFusion",
 )
+
+
+class SLPALite(nn.Module):
+    """Lightweight spatial Laplacian pyramid attention for YOLO feature enhancement."""
+
+    def __init__(self, c1: int, c2: int, rates: tuple[int, ...] = (1, 2, 3)):
+        """Initialize a lightweight multi-dilation spatial attention module."""
+        super().__init__()
+        self.proj = Conv(c1, c2, k=1, s=1) if c1 != c2 else nn.Identity()
+        self.branches = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(2, 1, kernel_size=3, padding=r, dilation=r, bias=False),
+                    nn.BatchNorm2d(1),
+                    nn.SiLU(inplace=True),
+                )
+                for r in rates
+            ]
+        )
+        self.fuse = nn.Conv2d(len(rates), 1, kernel_size=1, bias=True)
+        self.act = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply multi-dilation spatial attention and keep shape/channels unchanged."""
+        x = self.proj(x)
+        avg = x.mean(dim=1, keepdim=True)
+        mx = x.max(dim=1, keepdim=True)[0]
+        z = torch.cat((avg, mx), dim=1)
+        ms = self.act(self.fuse(torch.cat([branch(z) for branch in self.branches], dim=1)))
+        return x * ms
+
+
+class MSFEMLite(nn.Module):
+    """Lite multi-scale feature enhancement module for top-level neck input."""
+
+    def __init__(self, c1: int, c2: int, rates: tuple[int, ...] = (1, 2, 3, 4)):
+        """Initialize grouped multi-dilation and global-context branches."""
+        super().__init__()
+        n = len(rates)
+        if c1 % n != 0:
+            raise ValueError(f"MSFEMLite expects c1 divisible by number of rates, got c1={c1}, rates={rates}")
+        self.proj = Conv(c1, c2, k=1, s=1) if c1 != c2 else nn.Identity()
+        c = c2 // n
+        if c2 % n != 0:
+            raise ValueError(f"MSFEMLite expects c2 divisible by number of rates, got c2={c2}, rates={rates}")
+        self.branches = nn.ModuleList(
+            [Conv(c, c, k=3, d=r) for r in rates]
+        )
+        self.global_conv = Conv(c2, c2, k=1)
+        self.fuse = Conv(c2 * 3, c2, k=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Enhance the top-level feature while preserving tensor shape and channels."""
+        x = self.proj(x)
+        xs = torch.chunk(x, len(self.branches), dim=1)
+        ms = torch.cat([branch(xi) for branch, xi in zip(self.branches, xs)], dim=1)
+        gp = self.global_conv(F.adaptive_avg_pool2d(x, output_size=1))
+        gp = F.interpolate(gp, size=x.shape[-2:], mode="nearest")
+        return self.fuse(torch.cat((x, ms, gp), dim=1))
 
 
 class DFL(nn.Module):
@@ -122,6 +192,244 @@ class Proto(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through layers using an upsampled input image."""
         return self.cv3(self.cv2(self.upsample(self.cv1(x))))
+
+
+class GhostProjConv(nn.Module):
+    """Ghost-style projection used for lightweight Q/K/V projections."""
+
+    def __init__(self, c1: int, c2: int, k: int = 1, s: int = 1, ratio: int = 2):
+        """Initialize intrinsic + cheap-operation ghost projection conv."""
+        super().__init__()
+        c_ = max(1, c2 // ratio)
+        self.primary = nn.Sequential(
+            nn.Conv2d(c1, c_, k, s, autopad(k), bias=False),
+            nn.BatchNorm2d(c_),
+        )
+        self.cheap = nn.Sequential(
+            nn.Conv2d(c_, c2 - c_, 3, 1, 1, groups=c_, bias=False),
+            nn.BatchNorm2d(c2 - c_),
+        )
+        self.c2 = c2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply ghost projection and keep output channel count exact."""
+        y = self.primary(x)
+        return torch.cat((y, self.cheap(y)), 1)[:, : self.c2]
+
+
+class MCTA(nn.Module):
+    """Multi-dimensional channel trans-attention (channel-wise attention)."""
+
+    def __init__(self, c1: int, c2: int | None = None):
+        """Initialize channel-attention branch with residual normalization."""
+        super().__init__()
+        c2 = c1 if c2 is None else c2
+        self.q_proj = GhostProjConv(c1, c2)
+        self.k_proj = GhostProjConv(c1, c2)
+        self.v_proj = GhostProjConv(c1, c2)
+        self.out_proj = GhostProjConv(c2, c2)
+        self.norm = LayerNorm2d(c2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute channel-channel attention with spatial dimensions as context."""
+        b, c, h, w = x.shape
+        q = self.q_proj(x).reshape(b, c, h * w)
+        k = self.k_proj(x).reshape(b, c, h * w)
+        v = self.v_proj(x).reshape(b, c, h * w)
+
+        attn = (q @ k.transpose(-1, -2)) * (h * w) ** -0.5
+        attn = attn.softmax(dim=-1)
+        y = (attn @ v).reshape(b, c, h, w)
+        y = self.out_proj(y)
+        return self.norm(x + y)
+
+
+class MSTA(nn.Module):
+    """Multi-dimensional spatial trans-attention using block-wise spatial attention."""
+
+    def __init__(self, c1: int, c2: int | None = None, block_size: int = 4):
+        """Initialize block-attention branch with local windowed attention."""
+        super().__init__()
+        c2 = c1 if c2 is None else c2
+        self.block_size = block_size
+        self.q_proj = GhostProjConv(c1, c2)
+        self.k_proj = GhostProjConv(c1, c2)
+        self.v_proj = GhostProjConv(c1, c2)
+        self.out_proj = GhostProjConv(c2, c2)
+        self.norm = LayerNorm2d(c2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply non-overlapping block-wise spatial attention and residual normalization."""
+        b, c, h, w = x.shape
+        bs = self.block_size
+        pad_h = (bs - h % bs) % bs
+        pad_w = (bs - w % bs) % bs
+
+        x_pad = F.pad(x, (0, pad_w, 0, pad_h)) if (pad_h or pad_w) else x
+        _, _, hp, wp = x_pad.shape
+        nh, nw = hp // bs, wp // bs
+
+        q = self.q_proj(x_pad)
+        k = self.k_proj(x_pad)
+        v = self.v_proj(x_pad)
+
+        def unfold_blocks(t: torch.Tensor) -> torch.Tensor:
+            return t.view(b, c, nh, bs, nw, bs).permute(0, 2, 4, 3, 5, 1).reshape(b * nh * nw, bs * bs, c)
+
+        q_b = unfold_blocks(q)
+        k_b = unfold_blocks(k)
+        v_b = unfold_blocks(v)
+
+        attn = (q_b @ k_b.transpose(-1, -2)) * (c**-0.5)
+        attn = attn.softmax(dim=-1)
+        y_b = attn @ v_b
+
+        y = y_b.view(b, nh, nw, bs, bs, c).permute(0, 5, 1, 3, 2, 4).reshape(b, c, hp, wp)
+        y = y[..., :h, :w]
+        y = self.out_proj(y)
+        return self.norm(x + y)
+
+
+class MCSTA(nn.Module):
+    """MCSTA block: MCTA followed by MSTA."""
+
+    def __init__(self, c1: int, c2: int | None = None, block_size: int = 4):
+        """Initialize sequential channel-spatial trans-attention."""
+        super().__init__()
+        c2 = c1 if c2 is None else c2
+        self.mcta = MCTA(c1, c2)
+        self.msta = MSTA(c2, c2, block_size=block_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply channel then block-wise spatial attention with internal residuals."""
+        return self.msta(self.mcta(x))
+
+
+class CIEPool(nn.Module):
+    """Minimal context-information-enhancement pooling for neck fusion refinement."""
+
+    def __init__(self, c1: int, c2: int, dilations: tuple[int, int, int] = (1, 3, 5)):
+        """Initialize CIE-Pool with multi-dilation context, pooling context and weighted fusion."""
+        super().__init__()
+        self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        self.dilated = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Conv2d(c2, c2, 3, 1, padding=d, dilation=d, groups=c2, bias=False),
+                    nn.BatchNorm2d(c2),
+                    nn.SiLU(),
+                )
+                for d in dilations
+            ]
+        )
+        self.xa_fuse = Conv(c2 * len(dilations), c2, 1, 1)
+        self.pool3 = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+        self.pool5 = nn.AvgPool2d(kernel_size=5, stride=1, padding=2)
+        self.pool13 = nn.AvgPool2d(kernel_size=13, stride=1, padding=6)
+        self.xb_fuse = Conv(c2 * 3, c2, 1, 1)
+        self.weights = nn.Parameter(torch.zeros(3))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply Xa/Xb/Xc composition and learnable weighted aggregation."""
+        x = self.proj(x)
+        xa = self.xa_fuse(torch.cat([branch(x) for branch in self.dilated], 1))
+        xb = self.xb_fuse(torch.cat((self.pool3(xa), self.pool5(xa), self.pool13(xa)), 1))
+        xc = xa * xb
+        w = self.weights.softmax(0)
+        return w[0] * xa + w[1] * xb + w[2] * xc
+
+
+class SECBAMLite(nn.Module):
+    """Lightweight SE+CBAM-style attention with residual stabilization."""
+
+    def __init__(self, c1: int, c2: int, reduction: int = 16):
+        """Initialize channel (1x1 conv MLP) and spatial (stacked 3x3 conv) attention."""
+        super().__init__()
+        self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        hidden = max(c2 // reduction, 8)
+        self.cam = nn.Sequential(
+            nn.Conv2d(c2, hidden, 1, bias=False),
+            nn.SiLU(),
+            nn.Conv2d(hidden, c2, 1, bias=False),
+        )
+        self.sam = nn.Sequential(
+            nn.Conv2d(2, 1, 3, padding=1, bias=False),
+            nn.SiLU(),
+            nn.Conv2d(1, 1, 3, padding=1, bias=False),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply CAM then SAM and return residual-refined feature."""
+        x = self.proj(x)
+        y = x
+        ca = self.cam(F.adaptive_avg_pool2d(y, 1)).sigmoid()
+        y = y * ca
+        sa = self.sam(torch.cat((y.mean(1, keepdim=True), y.max(1, keepdim=True)[0]), 1)).sigmoid()
+        y = y * sa
+        return x + y
+
+
+class AFPBlock(nn.Module):
+    """Adaptive feature processing with multi-depth paths and learnable fusion."""
+
+    def __init__(self, c1: int, c2: int):
+        """Initialize AFP block as minimal equivalent engineering implementation."""
+        super().__init__()
+        self.proj = Conv(c1, c2, 1, 1) if c1 != c2 else nn.Identity()
+        self.path_id = nn.Identity()
+        self.path_1 = Conv(c2, c2, 3, 1)
+        self.path_2 = nn.Sequential(Conv(c2, c2, 3, 1), Conv(c2, c2, 3, 1))
+        self.weights = nn.Parameter(torch.zeros(3))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Fuse shallow, medium, and deeper responses by softmax-normalized weights."""
+        x = self.proj(x)
+        p0 = self.path_id(x)
+        p1 = self.path_1(x)
+        p2 = self.path_2(x)
+        w = self.weights.softmax(0)
+        return w[0] * p0 + w[1] * p1 + w[2] * p2
+
+
+class P2P3Fuse(nn.Module):
+    """Fuse higher-resolution P2 feature into P3 while preserving P3 output shape."""
+
+    def __init__(self, channels: list[int], c2: int):
+        """Initialize P2-to-P3 fusion with alignment and lightweight refinement."""
+        super().__init__()
+        c2_in, c3_in = channels
+        self.p2_align = Conv(c2_in, c2, 3, 2)
+        self.p3_align = Conv(c3_in, c2, 1, 1)
+        self.fuse = nn.Sequential(Conv(c2 * 2, c2, 3, 1), Conv(c2, c2, 3, 1))
+
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        """Downsample P2, align channels, and fuse with P3 by concat+conv."""
+        p2, p3 = x
+        p2 = self.p2_align(p2)
+        if p2.shape[-2:] != p3.shape[-2:]:
+            p2 = F.interpolate(p2, size=p3.shape[-2:], mode="nearest")
+        p3 = self.p3_align(p3)
+        return self.fuse(torch.cat((p3, p2), 1))
+
+
+class RawRefineFuse(nn.Module):
+    """Fuse same-level raw backbone feature into neck feature for detail recovery."""
+
+    def __init__(self, channels: list[int], c2: int):
+        """Initialize residual-style neck/raw fusion."""
+        super().__init__()
+        c_neck, c_raw = channels
+        self.neck_align = Conv(c_neck, c2, 1, 1)
+        self.raw_align = Conv(c_raw, c2, 1, 1)
+        self.refine = Conv(c2, c2, 3, 1)
+
+    def forward(self, x: list[torch.Tensor]) -> torch.Tensor:
+        """Align and merge neck + backbone raw features, then refine."""
+        neck, raw = x
+        if raw.shape[-2:] != neck.shape[-2:]:
+            raw = F.interpolate(raw, size=neck.shape[-2:], mode="nearest")
+        y = self.neck_align(neck) + self.raw_align(raw)
+        return self.refine(y)
 
 
 class HGStem(nn.Module):
