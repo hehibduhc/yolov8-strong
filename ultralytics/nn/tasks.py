@@ -56,8 +56,11 @@ from ultralytics.nn.modules import (
     ConvTranspose,
     Detect,
     MCSTA,
+    AFPBlock,
+    CIEPool,
     P2P3Fuse,
     RawRefineFuse,
+    SECBAMLite,
     DWConv,
     DWConvTranspose2d,
     Focus,
@@ -1591,6 +1594,9 @@ def parse_model(d, ch, verbose=True):
             BiFPNBlock,
             MCSTA,
             AGMBlock,
+            AFPBlock,
+            CIEPool,
+            SECBAMLite,
         }
     )
     repeat_modules = frozenset(  # modules with 'repeat' arguments
