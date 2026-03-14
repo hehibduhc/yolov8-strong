@@ -25,6 +25,9 @@ __all__ = (
     "CMHA",
     "DFL",
     "ELAN1",
+    "MCSTA",
+    "MCTA",
+    "MSTA",
     "PSA",
     "SPP",
     "SPPELAN",
@@ -36,6 +39,7 @@ __all__ = (
     "SPPFSPDC",
     "AConv",
     "ADown",
+    "AFPBlock",
     "AGMBlock",
     "Attention",
     "BNContrastiveHead",
@@ -54,36 +58,32 @@ __all__ = (
     "C3x",
     "CBFuse",
     "CBLinear",
+    "CIEPool",
     "ContrastiveHead",
     "DWRBottleneck",
     "GEBlock",
     "GhostBottleneck",
+    "GhostProjConv",
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
     "MDKABottleneck",
     "MDKAConv",
-    "Proto",
-    "GhostProjConv",
-    "MCTA",
-    "MSTA",
-    "MCSTA",
+    "MSFEMLite",
     "P2P3Fuse",
-    "AFPBlock",
-    "CIEPool",
+    "Proto",
     "RawRefineFuse",
     "RepC3",
     "RepNCSPELAN4",
     "RepVGGDW",
     "ResNetLayer",
     "SCDown",
-    "SPDConvDown",
+    "SECBAMLite",
     "SLPALite",
-    "MSFEMLite",
+    "SPDConvDown",
     "SPPFFCARes",
     "SPPFLSKARes",
     "SPPFSPRes",
-    "SECBAMLite",
     "TorchVision",
     "WeightedFusion",
 )
@@ -132,9 +132,7 @@ class MSFEMLite(nn.Module):
         c = c2 // n
         if c2 % n != 0:
             raise ValueError(f"MSFEMLite expects c2 divisible by number of rates, got c2={c2}, rates={rates}")
-        self.branches = nn.ModuleList(
-            [Conv(c, c, k=3, d=r) for r in rates]
-        )
+        self.branches = nn.ModuleList([Conv(c, c, k=3, d=r) for r in rates])
         self.global_conv = Conv(c2, c2, k=1)
         self.fuse = Conv(c2 * 3, c2, k=1)
 
