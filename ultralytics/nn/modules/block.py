@@ -25,6 +25,9 @@ __all__ = (
     "CMHA",
     "DFL",
     "ELAN1",
+    "MCSTA",
+    "MCTA",
+    "MSTA",
     "PSA",
     "SPP",
     "SPPELAN",
@@ -36,6 +39,7 @@ __all__ = (
     "SPPFSPDC",
     "AConv",
     "ADown",
+    "AFPBlock",
     "AGMBlock",
     "Attention",
     "BNContrastiveHead",
@@ -54,35 +58,32 @@ __all__ = (
     "C3x",
     "CBFuse",
     "CBLinear",
+    "CIEPool",
     "ContrastiveHead",
     "DWRBottleneck",
     "GEBlock",
     "GhostBottleneck",
+    "GhostProjConv",
     "HGBlock",
     "HGStem",
     "ImagePoolingAttn",
     "MDKABottleneck",
     "MDKAConv",
-    "Proto",
-    "GhostProjConv",
-    "MCTA",
-    "MSTA",
-    "MCSTA",
+    "MSFEMLite",
     "P2P3Fuse",
-    "AFPBlock",
-    "CIEPool",
+    "Proto",
     "RawRefineFuse",
     "RepC3",
     "RepNCSPELAN4",
     "RepVGGDW",
     "ResNetLayer",
     "SCDown",
+    "SECBAMLite",
     "SLPALite",
-    "MSFEMLite",
+    "SPDConvDown",
     "SPPFFCARes",
     "SPPFLSKARes",
     "SPPFSPRes",
-    "SECBAMLite",
     "TorchVision",
     "WeightedFusion",
 )
@@ -131,9 +132,7 @@ class MSFEMLite(nn.Module):
         c = c2 // n
         if c2 % n != 0:
             raise ValueError(f"MSFEMLite expects c2 divisible by number of rates, got c2={c2}, rates={rates}")
-        self.branches = nn.ModuleList(
-            [Conv(c, c, k=3, d=r) for r in rates]
-        )
+        self.branches = nn.ModuleList([Conv(c, c, k=3, d=r) for r in rates])
         self.global_conv = Conv(c2, c2, k=1)
         self.fuse = Conv(c2 * 3, c2, k=1)
 
@@ -2494,6 +2493,43 @@ class SCDown(nn.Module):
             (torch.Tensor): Downsampled output tensor.
         """
         return self.cv2(self.cv1(x))
+
+
+class SPDConvDown(nn.Module):
+    """Space-to-depth downsampling followed by convolution projection.
+
+    This module replaces stride-2 convolutions for early downsampling while preserving more local information by
+    rearranging spatial neighborhoods into channels before projection.
+    """
+
+    def __init__(self, c1: int, c2: int, k: int = 3, s: int = 1, p: int | None = None, g: int = 1, act: bool = True):
+        """Initialize SPDConvDown.
+
+        Args:
+            c1 (int): Input channels.
+            c2 (int): Output channels after projection.
+            k (int): Projection convolution kernel size.
+            s (int): Projection convolution stride (must be 1 for downsampling replacement).
+            p (int, optional): Projection convolution padding.
+            g (int): Projection convolution groups.
+            act (bool | nn.Module): Activation for projection convolution.
+        """
+        super().__init__()
+        if s != 1:
+            raise ValueError(f"SPDConvDown expects s=1 because downsampling is handled by PixelUnshuffle, got s={s}")
+        self.spd = nn.PixelUnshuffle(2)
+        self.cv = Conv(c1 * 4, c2, k=k, s=1, p=p, g=g, act=act)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply space-to-depth rearrangement and channel projection.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+
+        Returns:
+            (torch.Tensor): Output tensor of shape (B, c2, H/2, W/2).
+        """
+        return self.cv(self.spd(x))
 
 
 class TorchVision(nn.Module):
