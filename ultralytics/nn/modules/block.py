@@ -31,18 +31,18 @@ __all__ = (
     "MCTA",
     "MSTA",
     "PSA",
+    "SGPSPPF",
     "SPP",
     "SPPELAN",
     "SPPF",
-    "SGPSPPF",
     "SPPFDLSKA",
     "SPPFFCA",
     "SPPFLSKA",
     "SPPFSP",
     "SPPFSPDC",
+    "AASKDown",
     "AConv",
     "ADown",
-    "AASKDown",
     "AFPBlock",
     "AGMBlock",
     "Attention",
@@ -65,7 +65,9 @@ __all__ = (
     "CBLinear",
     "CIEPool",
     "ContrastiveHead",
+    "CrackProto",
     "DWRBottleneck",
+    "DirectionalStripRefine",
     "GEBlock",
     "GhostBottleneck",
     "GhostProjConv",
@@ -79,8 +81,6 @@ __all__ = (
     "MSFEMLite",
     "P2P3Fuse",
     "Proto",
-    "CrackProto",
-    "DirectionalStripRefine",
     "RawRefineFuse",
     "RepC3",
     "RepNCSPELAN4",
@@ -141,7 +141,9 @@ class BlurPool2d(nn.Module):
         coeffs = torch.tensor([math.comb(filt_size - 1, i) for i in range(filt_size)], dtype=torch.float32)
         kernel = torch.outer(coeffs, coeffs)
         kernel = kernel / kernel.sum()
-        self.register_buffer("kernel", kernel.view(1, 1, filt_size, filt_size).repeat(channels, 1, 1, 1), persistent=False)
+        self.register_buffer(
+            "kernel", kernel.view(1, 1, filt_size, filt_size).repeat(channels, 1, 1, 1), persistent=False
+        )
         self.pad = filt_size // 2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

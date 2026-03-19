@@ -9,11 +9,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
 from ultralytics import YOLO
 
 
 def set_seed(seed: int = 42, deterministic: bool = True):
-    """固定随机种子与确定性设置（尽可能复现）"""
+    """固定随机种子与确定性设置（尽可能复现）."""
     # 修改理由：固定python/np/torch随机性，减少实验波动，保证消融对比可信。
     random.seed(seed)
     np.random.seed(seed)
@@ -96,25 +97,21 @@ def main():
 
         # 修改理由：输出目录按yaml命名，便于对比：runs/segment/<yaml_stem>/
         # Ultralytics默认project=runs/segment，这里显式指定，保证路径稳定。
-        results = model.train(
+        model.train(
             data=data_yaml,
             imgsz=imgsz,
             device=device,
             seed=seed,
             deterministic=True,  # 修改理由：Ultralytics内部也提供确定性选项，双保险。
             amp=amp,
-
             batch=batch,
             lr0=lr0,
-
             epochs=epochs,
             patience=patience,
             workers=workers,
-
             # 修改理由：保存与验证开启，方便选择best并对比曲线。
             save=True,
             val=True,
-
             # 修改理由：每个实验的runs目录独立，名称直接用yaml名避免混淆。
             project="runs/segment",
             name=yaml_stem,

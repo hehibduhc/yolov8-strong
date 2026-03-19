@@ -20,8 +20,7 @@ def main():
         val=True,  # 训练中验证
         pretrained=False,
         epochs=10,
-        name="test_scratch"
-        
+        name="test_scratch",
     )
 
 

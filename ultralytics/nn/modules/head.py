@@ -215,9 +215,8 @@ class Detect(nn.Module):
 class Segment(Detect):
     """YOLO Segment head for segmentation models.
 
-    This class extends the Detect head to include mask prediction capabilities for instance segmentation tasks.
-    It keeps the original three-branch behavior and optionally enables a fourth detail feature only for prototype
-    refinement.
+    This class extends the Detect head to include mask prediction capabilities for instance segmentation tasks. It keeps
+    the original three-branch behavior and optionally enables a fourth detail feature only for prototype refinement.
 
     Attributes:
         nm (int): Number of masks.
