@@ -1,0 +1,6 @@
+train: D:/BaiduNetdiskDownload/crack_0316_lab/crack-seg-paper-stadrad/train/images
+val: D:/BaiduNetdiskDownload/crack_0316_lab/crack-seg-paper-stadrad/valid/images
+test: D:/BaiduNetdiskDownload/crack_0316_lab/crack-seg-paper-stadrad/test/images
+
+nc: 1
+names: ["Cracks"]

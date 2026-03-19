@@ -1,0 +1,10 @@
+train: D:/BaiduNetdiskDownload/crack_0316_lab/single-crack-1/train/images
+val: D:/BaiduNetdiskDownload/crack_0316_lab/single-crack-1/valid/images
+test: D:/BaiduNetdiskDownload/crack_0316_lab/single-crack-1/test/images
+
+names:
+- curved crack
+- diagonal crack
+- horizontal crack
+- vertical cracks
+nc: 4

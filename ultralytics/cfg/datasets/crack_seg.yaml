@@ -1,6 +1,6 @@
-train: D:/BaiduNetdiskDownload/Crack Detection using Instance Segmentation in YOLOv8.v5i.yolov8/train/images
-val: D:/BaiduNetdiskDownload/Crack Detection using Instance Segmentation in YOLOv8.v5i.yolov8/valid/images
-test: D:/BaiduNetdiskDownload/Crack Detection using Instance Segmentation in YOLOv8.v5i.yolov8/test/images
+train: D:/BaiduNetdiskDownload/crack_0316_lab/Crack Detection using Instance Segmentation in YOLOv8.v5i.yolov8/train/images
+val: D:/BaiduNetdiskDownload/crack_0316_lab/Crack Detection using Instance Segmentation in YOLOv8.v5i.yolov8/valid/images
+test: D:/BaiduNetdiskDownload/crack_0316_lab/Crack Detection using Instance Segmentation in YOLOv8.v5i.yolov8/test/images
 
 nc: 1
 names: ["Cracks"]

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -32,6 +34,7 @@ __all__ = (
     "SPP",
     "SPPELAN",
     "SPPF",
+    "SGPSPPF",
     "SPPFDLSKA",
     "SPPFFCA",
     "SPPFLSKA",
@@ -39,6 +42,7 @@ __all__ = (
     "SPPFSPDC",
     "AConv",
     "ADown",
+    "AASKDown",
     "AFPBlock",
     "AGMBlock",
     "Attention",
@@ -52,6 +56,7 @@ __all__ = (
     "C2fCIB",
     "C2fDWR",
     "C2fMDKA",
+    "C2fMDKAStrip",
     "C2fPSA",
     "C3Ghost",
     "C3k2",
@@ -69,6 +74,8 @@ __all__ = (
     "ImagePoolingAttn",
     "MDKABottleneck",
     "MDKAConv",
+    "MDKAStripBottleneck",
+    "MDKAStripConv",
     "MSFEMLite",
     "P2P3Fuse",
     "Proto",
@@ -117,6 +124,27 @@ class SLPALite(nn.Module):
         z = torch.cat((avg, mx), dim=1)
         ms = self.act(self.fuse(torch.cat([branch(z) for branch in self.branches], dim=1)))
         return x * ms
+
+
+class BlurPool2d(nn.Module):
+    """Fixed low-pass filtering for anti-aliased downsampling."""
+
+    def __init__(self, channels: int, filt_size: int = 3):
+        """Initialize a depthwise blur filter with binomial coefficients."""
+        super().__init__()
+        if channels <= 0:
+            raise ValueError(f"channels must be positive, but got {channels}")
+        if filt_size <= 0 or filt_size % 2 == 0:
+            raise ValueError(f"filt_size must be a positive odd integer, but got {filt_size}")
+        coeffs = torch.tensor([math.comb(filt_size - 1, i) for i in range(filt_size)], dtype=torch.float32)
+        kernel = torch.outer(coeffs, coeffs)
+        kernel = kernel / kernel.sum()
+        self.register_buffer("kernel", kernel.view(1, 1, filt_size, filt_size).repeat(channels, 1, 1, 1), persistent=False)
+        self.pad = filt_size // 2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply depthwise blur while preserving spatial resolution."""
+        return F.conv2d(x, self.kernel, stride=1, padding=self.pad, groups=x.shape[1])
 
 
 class MSFEMLite(nn.Module):
@@ -559,6 +587,94 @@ class SPPF(nn.Module):
         y = [self.cv1(x)]
         y.extend(self.m(y[-1]) for _ in range(3))
         return self.cv2(torch.cat(y, 1))
+
+
+class SGPSPPF(nn.Module):
+    """Selective Global Pyramid SPPF with global, strip, and large-kernel context branches."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        k: int = 5,
+        large_k: int = 17,
+        strip_reduction: int = 4,
+        gate_reduction: int = 16,
+        alpha: float = 0.5,
+        use_global_branch: bool = True,
+        use_strip_branch: bool = True,
+        use_large_branch: bool = True,
+        gated: bool = True,
+    ):
+        """Initialize SGPSPPF."""
+        super().__init__()
+        if large_k <= 0 or large_k % 2 == 0:
+            raise ValueError(f"large_k must be a positive odd integer, but got {large_k}")
+        if gate_reduction <= 0:
+            raise ValueError(f"gate_reduction must be positive, but got {gate_reduction}")
+        c_ = c1 // 2
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_ * 4, c2, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2)
+
+        self.use_global_branch = use_global_branch
+        self.use_strip_branch = use_strip_branch
+        self.use_large_branch = use_large_branch
+        self.gated = gated
+        self.alpha = float(alpha)
+
+        if self.use_global_branch:
+            self.global_proj = Conv(c2, c2, 1, 1)
+        if self.use_strip_branch:
+            self.strip_branch = StripPoolingAtrous(c2, reduction=strip_reduction, dilations=(2, 3))
+        if self.use_large_branch:
+            self.large_branch = nn.Sequential(
+                nn.Conv2d(c2, c2, kernel_size=large_k, stride=1, padding=large_k // 2, groups=c2, bias=False),
+                nn.BatchNorm2d(c2),
+                nn.SiLU(inplace=True),
+                Conv(c2, c2, 1, 1),
+            )
+
+        self.fuse = Conv(c2, c2, 1, 1)
+        if self.gated:
+            hidden_c = max(c2 // gate_reduction, 1)
+            self.gap = nn.AdaptiveAvgPool2d(1)
+            self.gate_mlp = nn.Sequential(
+                nn.Conv2d(c2, hidden_c, 1, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(hidden_c, 1, 1, bias=True),
+            )
+
+    def _mix_branches(self, branches: list[torch.Tensor]) -> torch.Tensor:
+        """Fuse active branches by softmax gating or arithmetic mean."""
+        if len(branches) == 1:
+            return branches[0]
+        if self.gated:
+            weights = torch.cat([self.gate_mlp(self.gap(branch)) for branch in branches], 1).softmax(1)
+            mixed = sum(branch * weights[:, i : i + 1] for i, branch in enumerate(branches))
+        else:
+            mixed = sum(branches) / len(branches)
+        return mixed
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply SPPF local pyramid and selectively fuse additional global/context branches."""
+        y = [self.cv1(x)]
+        y.extend(self.m(y[-1]) for _ in range(3))
+        local = self.cv2(torch.cat(y, 1))
+
+        branches = [local]
+        if self.use_global_branch:
+            gp = self.global_proj(F.adaptive_avg_pool2d(local, output_size=1))
+            gp = F.interpolate(gp, size=local.shape[-2:], mode="nearest")
+            branches.append(gp)
+        if self.use_strip_branch:
+            branches.append(self.strip_branch(local))
+        if self.use_large_branch:
+            branches.append(self.large_branch(local))
+
+        mixed = self._mix_branches(branches)
+        fused = self.fuse(mixed)
+        return local + self.alpha * (fused - local) if len(branches) > 1 else fused
 
 
 class SPPFFCA(nn.Module):
@@ -1045,6 +1161,253 @@ class C2fMDKA(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass through C2fMDKA layer."""
+        y = list(self.cv1(x).chunk(2, 1))
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+    def forward_split(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass using split() instead of chunk()."""
+        y = self.cv1(x).split((self.c, self.c), 1)
+        y = [y[0], y[1]]
+        y.extend(m(y[-1]) for m in self.m)
+        return self.cv2(torch.cat(y, 1))
+
+
+class MDKAStripConv(nn.Module):
+    """MDKA convolution with an additional strip-pooling directional branch."""
+
+    def __init__(
+        self,
+        c: int,
+        kc: int = 3,
+        act: str = "silu",
+        use_gelu: bool = False,
+        gated: bool = False,
+        dilations: tuple[int, int, int] = (1, 2, 3),
+        boundary: bool = False,
+        boundary_weight: float = 1.0,
+        boundary_mode: str = "sobel",
+        gate_type: str = "softmax",
+        reduction: int = 16,
+        strip_reduction: int = 4,
+    ):
+        """Initialize MDKAStripConv."""
+        super().__init__()
+        if c <= 0:
+            raise ValueError(f"c must be positive, but got {c}")
+        if reduction <= 0:
+            raise ValueError(f"reduction must be positive, but got {reduction}")
+        if strip_reduction <= 0:
+            raise ValueError(f"strip_reduction must be positive, but got {strip_reduction}")
+        if len(dilations) != 3:
+            raise ValueError(f"dilations must contain 3 values for MDKA branches, but got {dilations}")
+        if any(d <= 0 for d in dilations):
+            raise ValueError(f"all dilations must be positive, but got {dilations}")
+        if boundary_mode != "sobel":
+            raise ValueError(f"Unsupported boundary_mode='{boundary_mode}', expected 'sobel'.")
+        if gate_type not in {"softmax", "sigmoid"}:
+            raise ValueError(f"Unsupported gate_type='{gate_type}', expected 'softmax' or 'sigmoid'.")
+
+        def get_act() -> nn.Module:
+            if use_gelu:
+                return nn.GELU()
+            if act == "silu":
+                return nn.SiLU()
+            if act == "relu":
+                return nn.ReLU(inplace=True)
+            raise ValueError(f"Unsupported act='{act}', expected 'silu' or 'relu'.")
+
+        d1, d2, d3 = dilations
+
+        self.xin = Conv(c, c, k=kc, s=1, act=get_act())
+
+        self.s1 = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=d1, dilation=d1, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+
+        self.s2a = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=1, dilation=1, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+        self.s2b = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=d2, dilation=d2, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+
+        self.s3a = nn.Sequential(
+            nn.Conv2d(c, c, 5, stride=1, padding=2, dilation=1, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+        self.s3b = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=d2, dilation=d2, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+        self.s3c = nn.Sequential(
+            nn.Conv2d(c, c, 3, stride=1, padding=d3, dilation=d3, bias=False),
+            nn.BatchNorm2d(c),
+            get_act(),
+        )
+
+        # Direction-aware context for elongated crack structures.
+        self.s4 = StripPoolingAtrous(c, reduction=strip_reduction, dilations=(d2, d3))
+        self.fuse = Conv(4 * c, c, k=1, s=1, act=get_act())
+
+        self.gated = gated
+        self.gate_type = gate_type
+        if self.gated:
+            hidden_c = max(c // reduction, 1)
+            self.gap = nn.AdaptiveAvgPool2d(1)
+            self.gate_mlp = nn.Sequential(
+                nn.Conv2d(c, hidden_c, 1, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(hidden_c, 1, 1, bias=True),
+            )
+
+        self.boundary = boundary
+        self.boundary_weight = boundary_weight
+        if self.boundary:
+            sobel_x = torch.tensor([[1.0, 0.0, -1.0], [2.0, 0.0, -2.0], [1.0, 0.0, -1.0]], dtype=torch.float32)
+            sobel_y = torch.tensor([[1.0, 2.0, 1.0], [0.0, 0.0, 0.0], [-1.0, -2.0, -1.0]], dtype=torch.float32)
+            self.register_buffer("sobel_x", sobel_x.view(1, 1, 3, 3).repeat(c, 1, 1, 1), persistent=False)
+            self.register_buffer("sobel_y", sobel_y.view(1, 1, 3, 3).repeat(c, 1, 1, 1), persistent=False)
+            self.boundary_alpha_x = nn.Parameter(torch.ones(1, c, 1, 1))
+            self.boundary_alpha_y = nn.Parameter(torch.ones(1, c, 1, 1))
+            self.boundary_proj = Conv(c, c, k=1, s=1, act=get_act())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through MDKAStripConv."""
+        xin = self.xin(x)
+        y1 = self.s1(xin)
+
+        y2a = self.s2a(xin)
+        y2 = y2a + self.s2b(y2a)
+
+        y3a = self.s3a(xin)
+        y3b = self.s3b(y3a)
+        y3 = y3b + self.s3c(y3b)
+
+        y4 = self.s4(xin)
+
+        if self.gated:
+            w = torch.cat(
+                (
+                    self.gate_mlp(self.gap(y1)),
+                    self.gate_mlp(self.gap(y2)),
+                    self.gate_mlp(self.gap(y3)),
+                    self.gate_mlp(self.gap(y4)),
+                ),
+                1,
+            )
+            if self.gate_type == "softmax":
+                w = w.softmax(1)
+            else:
+                w = w.sigmoid()
+            y1, y2, y3, y4 = y1 * w[:, 0:1], y2 * w[:, 1:2], y3 * w[:, 2:3], y4 * w[:, 3:4]
+
+        out = self.fuse(torch.cat((y1, y2, y3, y4), 1))
+        if self.boundary:
+            gx = (
+                F.conv2d(xin, self.sobel_x, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_x
+            )
+            gy = (
+                F.conv2d(xin, self.sobel_y, bias=None, stride=1, padding=1, groups=xin.shape[1]) * self.boundary_alpha_y
+            )
+            g = torch.abs(gx) + torch.abs(gy)
+            out = out + self.boundary_weight * self.boundary_proj(g)
+        return out + xin
+
+
+class MDKAStripBottleneck(nn.Module):
+    """Bottleneck variant with MDKAStripConv for directional context aggregation."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        shortcut: bool = True,
+        e: float = 0.5,
+        g: int = 1,
+        kc: int = 3,
+        gated: bool = False,
+        dilations: tuple[int, int, int] = (1, 2, 3),
+        boundary: bool = False,
+        boundary_weight: float = 1.0,
+        boundary_mode: str = "sobel",
+        strip_reduction: int = 4,
+    ):
+        """Initialize MDKAStripBottleneck."""
+        super().__init__()
+        c_ = int(c2 * e)
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = MDKAStripConv(
+            c_,
+            kc=kc,
+            gated=gated,
+            dilations=dilations,
+            boundary=boundary,
+            boundary_weight=boundary_weight,
+            boundary_mode=boundary_mode,
+            strip_reduction=strip_reduction,
+        )
+        self.cv3 = Conv(c_, c2, 1, 1)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through MDKAStripBottleneck."""
+        y = self.cv3(self.cv2(self.cv1(x)))
+        return x + y if self.add else y
+
+
+class C2fMDKAStrip(nn.Module):
+    """C2f module using directional MDKA bottlenecks while preserving I/O behavior."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        n: int = 1,
+        shortcut: bool = False,
+        g: int = 1,
+        e: float = 0.5,
+        kc: int = 3,
+        gated: bool = False,
+        dilations: tuple[int, int, int] = (1, 2, 3),
+        boundary: bool = False,
+        boundary_weight: float = 1.0,
+        boundary_mode: str = "sobel",
+        strip_reduction: int = 4,
+    ):
+        """Initialize C2fMDKAStrip."""
+        super().__init__()
+        self.c = int(c2 * e)
+        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
+        self.cv2 = Conv((2 + n) * self.c, c2, 1)
+        self.m = nn.ModuleList(
+            MDKAStripBottleneck(
+                self.c,
+                self.c,
+                shortcut,
+                e=1.0,
+                g=g,
+                kc=kc,
+                gated=gated,
+                dilations=dilations,
+                boundary=boundary,
+                boundary_weight=boundary_weight,
+                boundary_mode=boundary_mode,
+                strip_reduction=strip_reduction,
+            )
+            for _ in range(n)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass through C2fMDKAStrip layer."""
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
@@ -2530,6 +2893,94 @@ class SPDConvDown(nn.Module):
             (torch.Tensor): Output tensor of shape (B, c2, H/2, W/2).
         """
         return self.cv(self.spd(x))
+
+
+class AASKDown(nn.Module):
+    """Anti-aliased adaptive selective-kernel downsampling."""
+
+    def __init__(
+        self,
+        c1: int,
+        c2: int,
+        large_k: int = 5,
+        blur_k: int = 3,
+        gate_reduction: int = 16,
+        use_blur_branch: bool = True,
+        use_large_branch: bool = True,
+        use_spd_branch: bool = True,
+        gated: bool = True,
+        refine: bool = True,
+    ):
+        """Initialize AASKDown."""
+        super().__init__()
+        if c1 <= 0 or c2 <= 0:
+            raise ValueError(f"c1 and c2 must be positive, but got c1={c1}, c2={c2}")
+        if large_k <= 0 or large_k % 2 == 0:
+            raise ValueError(f"large_k must be a positive odd integer, but got {large_k}")
+        if blur_k <= 0 or blur_k % 2 == 0:
+            raise ValueError(f"blur_k must be a positive odd integer, but got {blur_k}")
+        if gate_reduction <= 0:
+            raise ValueError(f"gate_reduction must be positive, but got {gate_reduction}")
+
+        self.use_blur_branch = use_blur_branch
+        self.use_large_branch = use_large_branch
+        self.use_spd_branch = use_spd_branch
+        self.gated = gated
+
+        if not any((self.use_blur_branch, self.use_large_branch, self.use_spd_branch)):
+            raise ValueError("AASKDown requires at least one active branch.")
+
+        if self.use_blur_branch:
+            self.blur_branch = nn.Sequential(
+                BlurPool2d(c1, filt_size=blur_k),
+                nn.Conv2d(c1, c1, kernel_size=3, stride=2, padding=1, groups=c1, bias=False),
+                nn.BatchNorm2d(c1),
+                nn.SiLU(inplace=True),
+                Conv(c1, c2, 1, 1),
+            )
+        if self.use_large_branch:
+            self.large_branch = nn.Sequential(
+                nn.Conv2d(c1, c1, kernel_size=large_k, stride=2, padding=large_k // 2, groups=c1, bias=False),
+                nn.BatchNorm2d(c1),
+                nn.SiLU(inplace=True),
+                Conv(c1, c2, 1, 1),
+            )
+        if self.use_spd_branch:
+            self.spd = nn.PixelUnshuffle(2)
+            self.spd_branch = Conv(c1 * 4, c2, 1, 1)
+
+        if self.gated:
+            hidden_c = max(c2 // gate_reduction, 1)
+            self.gap = nn.AdaptiveAvgPool2d(1)
+            self.gate_mlp = nn.Sequential(
+                nn.Conv2d(c2, hidden_c, 1, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(hidden_c, 1, 1, bias=True),
+            )
+
+        self.refine = Conv(c2, c2, 3, 1) if refine else nn.Identity()
+
+    def _mix_branches(self, branches: list[torch.Tensor]) -> torch.Tensor:
+        """Fuse active downsampling branches."""
+        if len(branches) == 1:
+            return branches[0]
+        if self.gated:
+            weights = torch.cat([self.gate_mlp(self.gap(branch)) for branch in branches], 1).softmax(1)
+            mixed = sum(branch * weights[:, i : i + 1] for i, branch in enumerate(branches))
+        else:
+            mixed = sum(branches) / len(branches)
+        return mixed
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Downsample input by selective fusion of anti-aliased, large-kernel, and SPD branches."""
+        branches = []
+        if self.use_blur_branch:
+            branches.append(self.blur_branch(x))
+        if self.use_large_branch:
+            branches.append(self.large_branch(x))
+        if self.use_spd_branch:
+            branches.append(self.spd_branch(self.spd(x)))
+        return self.refine(self._mix_branches(branches))
 
 
 class TorchVision(nn.Module):
