@@ -144,8 +144,7 @@ def print_run_summary(result_row: dict[str, Any]) -> None:
     inference_ms_text = f"{inference_ms:.3f}" if inference_ms is not None else "N/A"
     fps_text = f"{fps:.3f}" if fps is not None else "N/A"
     print(
-        f"[Extra] parameters={params:,}, GFLOPs={gflops:.3f}, "
-        f"inference(ms/image)={inference_ms_text}, FPS={fps_text}"
+        f"[Extra] parameters={params:,}, GFLOPs={gflops:.3f}, inference(ms/image)={inference_ms_text}, FPS={fps_text}"
     )
 
 
@@ -195,7 +194,9 @@ def main() -> None:
         model = YOLO(str(weight_path))
         model_stats = collect_model_stats(model.model, imgsz=args.imgsz)
         validator_cls = model._smart_load("validator")
-        validator = validator_cls(args={**model.overrides, **{"rect": True}, **val_kwargs, "mode": "val"}, _callbacks=model.callbacks)
+        validator = validator_cls(
+            args={**model.overrides, **{"rect": True}, **val_kwargs, "mode": "val"}, _callbacks=model.callbacks
+        )
         validator(model=model.model)
         result_row = collect_result_row(weight_path, run_name, validator, model_stats)
         print_run_summary(result_row)

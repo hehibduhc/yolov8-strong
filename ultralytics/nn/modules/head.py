@@ -15,7 +15,7 @@ from ultralytics.utils import NOT_MACOS14
 from ultralytics.utils.tal import dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import TORCH_1_11, fuse_conv_and_bn, smart_inference_mode
 
-from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, Proto, Residual, SwiGLUFFN
+from .block import DFL, SAVPE, BNContrastiveHead, ContrastiveHead, CrackProto, Proto, Residual, SwiGLUFFN
 from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
@@ -215,12 +215,15 @@ class Detect(nn.Module):
 class Segment(Detect):
     """YOLO Segment head for segmentation models.
 
-    This class extends the Detect head to include mask prediction capabilities for instance segmentation tasks.
+    This class extends the Detect head to include mask prediction capabilities for instance segmentation tasks. It keeps
+    the original three-branch behavior and optionally enables a fourth detail feature only for prototype refinement.
 
     Attributes:
         nm (int): Number of masks.
         npr (int): Number of protos.
-        proto (Proto): Prototype generation module.
+        use_detail_proto (bool): Whether the fourth input is used for refined prototype generation.
+        detail_ch (int | None): Channel count of the optional detail feature.
+        proto (Proto | CrackProto): Prototype generation module.
         cv4 (nn.ModuleList): Convolution layers for mask coefficients.
 
     Methods:
@@ -234,7 +237,7 @@ class Segment(Detect):
     """
 
     def __init__(self, nc: int = 80, nm: int = 32, npr: int = 256, ch: tuple = ()):
-        """Initialize the YOLO model attributes such as the number of masks, prototypes, and the convolution layers.
+        """Initialize segmentation mask heads while keeping the existing detect call chain intact.
 
         Args:
             nc (int): Number of classes.
@@ -242,21 +245,32 @@ class Segment(Detect):
             npr (int): Number of protos.
             ch (tuple): Tuple of channel sizes from backbone feature maps.
         """
-        super().__init__(nc, ch)
+        det_ch = ch[:3] if len(ch) > 3 else ch
+        super().__init__(nc, det_ch)
         self.nm = nm  # number of masks
         self.npr = npr  # number of protos
-        self.proto = Proto(ch[0], self.npr, self.nm)  # protos
+        self.use_detail_proto = len(ch) > 3
+        self.detail_ch = ch[3] if self.use_detail_proto else None
+        self.proto = (
+            CrackProto(det_ch[0], self.detail_ch, self.npr, self.nm)
+            if self.use_detail_proto
+            else Proto(det_ch[0], self.npr, self.nm)
+        )
 
-        c4 = max(ch[0] // 4, self.nm)
-        self.cv4 = nn.ModuleList(nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nm, 1)) for x in ch)
+        c4 = max(det_ch[0] // 4, self.nm)
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(Conv(x, c4, 3), Conv(c4, c4, 3), nn.Conv2d(c4, self.nm, 1)) for x in det_ch
+        )
 
     def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor]:
-        """Return model outputs and mask coefficients if training, otherwise return outputs and mask coefficients."""
-        p = self.proto(x[0])  # mask protos
+        """Return model outputs and mask coefficients with optional P2-guided prototype refinement."""
+        x_det = x[:3] if self.use_detail_proto else x
+        detail_feat = x[3] if self.use_detail_proto else None
+        p = self.proto(x_det[0], detail_feat) if self.use_detail_proto else self.proto(x_det[0])
         bs = p.shape[0]  # batch size
 
-        mc = torch.cat([self.cv4[i](x[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)  # mask coefficients
-        x = Detect.forward(self, x)
+        mc = torch.cat([self.cv4[i](x_det[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)  # mask coefficients
+        x = Detect.forward(self, x_det)
         if self.training:
             return x, mc, p
         return (torch.cat([x, mc], 1), p) if self.export else (torch.cat([x[0], mc], 1), (x[1], mc, p))

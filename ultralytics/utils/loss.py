@@ -309,6 +309,12 @@ class v8SegmentationLoss(v8DetectionLoss):
         """Initialize the v8SegmentationLoss class with model parameters and mask overlap setting."""
         super().__init__(model)
         self.overlap = model.args.overlap_mask
+        self.crack_dice = float(getattr(model.args, "crack_dice", 0.5))
+        self.crack_edge = float(getattr(model.args, "crack_edge", 0.2))
+        sobel_x = torch.tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]], dtype=torch.float32)
+        sobel_y = torch.tensor([[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]], dtype=torch.float32)
+        self.sobel_kernel_x = sobel_x.view(1, 1, 3, 3).to(self.device)
+        self.sobel_kernel_y = sobel_y.view(1, 1, 3, 3).to(self.device)
 
     def __call__(self, preds: Any, batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Calculate and return the combined loss for detection and segmentation."""
@@ -394,28 +400,60 @@ class v8SegmentationLoss(v8DetectionLoss):
         return loss * batch_size, loss.detach()  # loss(box, seg, cls, dfl)
 
     @staticmethod
-    def single_mask_loss(
-        gt_mask: torch.Tensor, pred: torch.Tensor, proto: torch.Tensor, xyxy: torch.Tensor, area: torch.Tensor
+    def dice_loss_from_logits(pred_mask_logits: torch.Tensor, gt_mask: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        """Compute a soft Dice loss from mask logits."""
+        pred_prob = pred_mask_logits.sigmoid()
+        gt_mask = gt_mask.float()
+        pred_prob = pred_prob.flatten(1)
+        gt_mask = gt_mask.flatten(1)
+        intersection = (pred_prob * gt_mask).sum(1)
+        union = pred_prob.sum(1) + gt_mask.sum(1)
+        return 1.0 - ((2.0 * intersection + eps) / (union + eps))
+
+    def boundary_consistency_loss(
+        self, pred_mask_logits: torch.Tensor, gt_mask: torch.Tensor, crop_mask_weight: torch.Tensor, eps: float = 1e-6
     ) -> torch.Tensor:
-        """Compute the instance segmentation loss for a single image.
+        """Measure consistency between predicted and target boundaries inside cropped box regions."""
+        pred_prob = pred_mask_logits.sigmoid().unsqueeze(1)
+        gt_mask = gt_mask.float().unsqueeze(1)
+        sobel_kernel_x = self.sobel_kernel_x.to(device=pred_prob.device, dtype=pred_prob.dtype)
+        sobel_kernel_y = self.sobel_kernel_y.to(device=pred_prob.device, dtype=pred_prob.dtype)
+        pred_edge_x = F.conv2d(pred_prob, sobel_kernel_x, padding=1)
+        pred_edge_y = F.conv2d(pred_prob, sobel_kernel_y, padding=1)
+        gt_edge_x = F.conv2d(gt_mask, sobel_kernel_x, padding=1)
+        gt_edge_y = F.conv2d(gt_mask, sobel_kernel_y, padding=1)
+        pred_edge = torch.sqrt(pred_edge_x.square() + pred_edge_y.square() + eps).squeeze(1)
+        gt_edge = torch.sqrt(gt_edge_x.square() + gt_edge_y.square() + eps).squeeze(1)
+        pred_edge = pred_edge / pred_edge.amax(dim=(1, 2), keepdim=True).clamp_min(eps)
+        gt_edge = gt_edge / gt_edge.amax(dim=(1, 2), keepdim=True).clamp_min(eps)
+        weight_sum = crop_mask_weight.sum(dim=(1, 2)).clamp_min(1.0)
+        return (torch.abs(pred_edge - gt_edge) * crop_mask_weight).sum(dim=(1, 2)) / weight_sum
 
-        Args:
-            gt_mask (torch.Tensor): Ground truth mask of shape (N, H, W), where N is the number of objects.
-            pred (torch.Tensor): Predicted mask coefficients of shape (N, 32).
-            proto (torch.Tensor): Prototype masks of shape (32, H, W).
-            xyxy (torch.Tensor): Ground truth bounding boxes in xyxy format, normalized to [0, 1], of shape (N, 4).
-            area (torch.Tensor): Area of each ground truth bounding box of shape (N,).
+    def single_mask_loss(
+        self, gt_mask: torch.Tensor, pred: torch.Tensor, proto: torch.Tensor, xyxy: torch.Tensor, area: torch.Tensor
+    ) -> torch.Tensor:
+        """Compute cropped BCE + Dice + boundary consistency losses for a single image."""
+        gt_mask = gt_mask.float()
+        pred_mask_logits = torch.einsum("in,nhw->ihw", pred, proto)
+        crop = crop_mask(torch.ones_like(gt_mask), xyxy)
+        area = area.clamp_min(1e-6)
 
-        Returns:
-            (torch.Tensor): The calculated mask loss for a single image.
+        bce_map = F.binary_cross_entropy_with_logits(pred_mask_logits, gt_mask, reduction="none")
+        bce_term = (crop_mask(bce_map, xyxy).mean(dim=(1, 2)) / area).sum()
 
-        Notes:
-            The function uses the equation pred_mask = torch.einsum('in,nhw->ihw', pred, proto) to produce the
-            predicted masks from the prototype masks and predicted mask coefficients.
-        """
-        pred_mask = torch.einsum("in,nhw->ihw", pred, proto)  # (n, 32) @ (32, 80, 80) -> (n, 80, 80)
-        loss = F.binary_cross_entropy_with_logits(pred_mask, gt_mask, reduction="none")
-        return (crop_mask(loss, xyxy).mean(dim=(1, 2)) / area).sum()
+        if self.crack_dice > 0:
+            pred_crop = pred_mask_logits * crop
+            gt_crop = gt_mask * crop
+            dice_term = (self.dice_loss_from_logits(pred_crop, gt_crop) / area).sum()
+        else:
+            dice_term = pred_mask_logits.sum() * 0.0
+
+        if self.crack_edge > 0:
+            edge_term = (self.boundary_consistency_loss(pred_mask_logits, gt_mask, crop) / area).sum()
+        else:
+            edge_term = pred_mask_logits.sum() * 0.0
+
+        return bce_term + self.crack_dice * dice_term + self.crack_edge * edge_term
 
     def calculate_segmentation_loss(
         self,

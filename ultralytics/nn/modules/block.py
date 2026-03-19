@@ -31,18 +31,18 @@ __all__ = (
     "MCTA",
     "MSTA",
     "PSA",
+    "SGPSPPF",
     "SPP",
     "SPPELAN",
     "SPPF",
-    "SGPSPPF",
     "SPPFDLSKA",
     "SPPFFCA",
     "SPPFLSKA",
     "SPPFSP",
     "SPPFSPDC",
+    "AASKDown",
     "AConv",
     "ADown",
-    "AASKDown",
     "AFPBlock",
     "AGMBlock",
     "Attention",
@@ -65,7 +65,9 @@ __all__ = (
     "CBLinear",
     "CIEPool",
     "ContrastiveHead",
+    "CrackProto",
     "DWRBottleneck",
+    "DirectionalStripRefine",
     "GEBlock",
     "GhostBottleneck",
     "GhostProjConv",
@@ -139,7 +141,9 @@ class BlurPool2d(nn.Module):
         coeffs = torch.tensor([math.comb(filt_size - 1, i) for i in range(filt_size)], dtype=torch.float32)
         kernel = torch.outer(coeffs, coeffs)
         kernel = kernel / kernel.sum()
-        self.register_buffer("kernel", kernel.view(1, 1, filt_size, filt_size).repeat(channels, 1, 1, 1), persistent=False)
+        self.register_buffer(
+            "kernel", kernel.view(1, 1, filt_size, filt_size).repeat(channels, 1, 1, 1), persistent=False
+        )
         self.pad = filt_size // 2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -219,6 +223,78 @@ class Proto(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through layers using an upsampled input image."""
         return self.cv3(self.cv2(self.upsample(self.cv1(x))))
+
+
+class DirectionalStripRefine(nn.Module):
+    """Lightweight directional refinement block for thin-structure segmentation details."""
+
+    def __init__(self, c1: int):
+        """Build three depthwise directional branches with residual gating.
+
+        Args:
+            c1 (int): Input and output channel count.
+        """
+        super().__init__()
+        self.branches = nn.ModuleList(
+            (
+                nn.Sequential(
+                    nn.Conv2d(c1, c1, kernel_size=(1, 7), padding=(0, 3), groups=c1, bias=False),
+                    nn.BatchNorm2d(c1),
+                    nn.SiLU(inplace=True),
+                ),
+                nn.Sequential(
+                    nn.Conv2d(c1, c1, kernel_size=(7, 1), padding=(3, 0), groups=c1, bias=False),
+                    nn.BatchNorm2d(c1),
+                    nn.SiLU(inplace=True),
+                ),
+                nn.Sequential(
+                    nn.Conv2d(c1, c1, kernel_size=3, padding=2, dilation=2, groups=c1, bias=False),
+                    nn.BatchNorm2d(c1),
+                    nn.SiLU(inplace=True),
+                ),
+            )
+        )
+        self.fuse = Conv(c1 * len(self.branches), c1, k=1, s=1)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.gate = nn.Sequential(nn.Conv2d(c1, c1, kernel_size=1, bias=True), nn.Sigmoid())
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Refine crack-like responses while preserving the original residual path."""
+        fused = self.fuse(torch.cat([branch(x) for branch in self.branches], dim=1))
+        gate = self.gate(self.pool(fused))
+        return x + gate * fused
+
+
+class CrackProto(nn.Module):
+    """Prototype generator with detail injection and directional refinement for crack segmentation."""
+
+    def __init__(self, c1: int, detail_c: int, c_: int = 256, c2: int = 32):
+        """Initialize the refined prototype branch.
+
+        Args:
+            c1 (int): P3 feature channels used by the segmentation head.
+            detail_c (int): P2 detail feature channels.
+            c_ (int): Intermediate prototype channels.
+            c2 (int): Output channels (number of protos).
+        """
+        super().__init__()
+        self.p3_stem = Conv(c1, c_, k=3)
+        self.upsample = nn.ConvTranspose2d(c_, c_, 2, 2, 0, bias=True)
+        self.detail_align = Conv(detail_c, c_, k=1, s=1)
+        self.fuse = Conv(c_ * 2, c_, k=3)
+        self.refine = DirectionalStripRefine(c_)
+        self.out_stem = Conv(c_, c_, k=3)
+        self.out_proj = Conv(c_, c2, k=1, s=1)
+
+    def forward(self, p3_feat: torch.Tensor, detail_feat: torch.Tensor) -> torch.Tensor:
+        """Fuse P3 semantics and P2 details into segmentation prototypes with the original output shape."""
+        proto_feat = self.upsample(self.p3_stem(p3_feat))
+        detail_feat = self.detail_align(detail_feat)
+        if detail_feat.shape[-2:] != proto_feat.shape[-2:]:
+            detail_feat = F.interpolate(detail_feat, size=proto_feat.shape[-2:], mode="nearest")
+        fused = self.fuse(torch.cat((proto_feat, detail_feat), dim=1))
+        refined = self.refine(fused)
+        return self.out_proj(self.out_stem(refined))
 
 
 class GhostProjConv(nn.Module):

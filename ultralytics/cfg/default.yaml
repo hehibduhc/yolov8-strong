@@ -42,6 +42,8 @@ compile: False # (bool | str) enable torch.compile() backend='inductor'; True="d
 # Segmentation
 overlap_mask: True # (bool) merge instance masks into one mask during training (segment only)
 mask_ratio: 4 # (int) mask downsample ratio (segment only)
+crack_dice: 0.5 # (float) auxiliary Dice gain for CPRH crack mask supervision
+crack_edge: 0.2 # (float) auxiliary boundary consistency gain for CPRH crack mask supervision
 
 # Classification
 dropout: 0.0 # (float) dropout for classification head (classify only)
