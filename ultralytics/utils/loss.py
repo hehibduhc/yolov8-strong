@@ -331,7 +331,7 @@ def tversky_loss(
 def boundary_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """Compute Sobel-edge L1 boundary loss from logits or probabilities."""
     pred_prob = torch.sigmoid(pred).unsqueeze(1)
-    target = target.float().unsqueeze(1)
+    target = target.to(dtype=pred_prob.dtype).unsqueeze(1)
     sobel_x = pred_prob.new_tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]).view(1, 1, 3, 3)
     sobel_y = pred_prob.new_tensor([[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]]).view(1, 1, 3, 3)
     pred_edge = torch.sqrt(F.conv2d(pred_prob, sobel_x, padding=1).square() + F.conv2d(pred_prob, sobel_y, padding=1).square() + eps)
