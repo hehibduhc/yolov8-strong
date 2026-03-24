@@ -42,8 +42,12 @@ compile: False # (bool | str) enable torch.compile() backend='inductor'; True="d
 # Segmentation
 overlap_mask: True # (bool) merge instance masks into one mask during training (segment only)
 mask_ratio: 4 # (int) mask downsample ratio (segment only)
-crack_dice: 0.5 # (float) auxiliary Dice gain for CPRH crack mask supervision
-crack_edge: 0.2 # (float) auxiliary boundary consistency gain for CPRH crack mask supervision
+seg_loss_type: baseline # (str) segmentation loss type: baseline|bce_dice|bce_tversky|bce_dice_boundary
+dice_weight: 1.0 # (float) Dice loss gain when seg_loss_type enables Dice
+tversky_weight: 1.0 # (float) Tversky loss gain when seg_loss_type=bce_tversky
+boundary_weight: 0.2 # (float) boundary loss gain when seg_loss_type=bce_dice_boundary
+tversky_alpha: 0.7 # (float) Tversky alpha coefficient
+tversky_beta: 0.3 # (float) Tversky beta coefficient
 
 # Classification
 dropout: 0.0 # (float) dropout for classification head (classify only)

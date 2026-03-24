@@ -154,6 +154,9 @@ CFG_FLOAT_KEYS = frozenset(
         "box",
         "cls",
         "dfl",
+        "dice_weight",
+        "tversky_weight",
+        "boundary_weight",
         "degrees",
         "shear",
         "time",
@@ -186,6 +189,8 @@ CFG_FRACTION_KEYS = frozenset(
         "conf",
         "iou",
         "fraction",
+        "tversky_alpha",
+        "tversky_beta",
     }
 )
 CFG_INT_KEYS = frozenset(
