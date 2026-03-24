@@ -16,7 +16,6 @@ from copy import deepcopy
 
 from ultralytics import YOLO
 
-
 LOSS_EXPERIMENTS = [
     {
         "seg_loss_type": "bce_dice",
