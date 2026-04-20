@@ -41,6 +41,7 @@ from ultralytics.nn.modules import (
     BiFPNBlock,
     Bottleneck,
     BottleneckCSP,
+    CARAFE,
     C2f,
     C2fAttn,
     C2fCIB,
@@ -1652,6 +1653,10 @@ def parse_model(d, ch, verbose=True):
         elif m in frozenset({P2P3Fuse, RawRefineFuse}):
             c2 = make_divisible(min(args[0], max_channels) * width, 8)
             args = [[ch[x] for x in f], c2, *args[1:]]
+        elif m is CARAFE:
+            c1 = ch[f]
+            args = [c1, *args]
+            c2 = c1
         elif m in base_modules:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)
