@@ -37,17 +37,13 @@ def main():
     # =========================
     # 全局配置（你按需改路径即可）
     # =========================
-    data_yaml = "/public/home/ctjby/lxyolov8-0301/ultralytics-main/ultralytics/cfg/datasets/crack_seg_fly.yaml"
+    data_yaml = "/public/home/ctjby/lxyolov8-0301/ultralytics-main/ultralytics/cfg/datasets/crack_seg_paper.yaml"
     pretrained = "yolov8n-seg.pt"  # 修改理由：保持与原训练一致，确保对比公平。
     device = 0  # 修改理由：明确使用一张A800（cuda:0）。
 
     # 你的四个消融实验yaml（文件名会自动用于runs输出目录）
     exp_yamls = [
         "yolov8-seg.yaml",
-        "yolov8-seg-spd13-mdka-sadilation-sppf-replk-full.yaml",
-        "yolov8-seg-spd13.yaml",
-        "yolov8-seg-sppf-replk-full.yaml",
-        "yolov8-seg-mdka-sadilation.yaml",
         # "yolov8-seg-mdka-neck.yaml",       # 改进1：只替换输出三尺度C2f为C2fMDKA
         # "yolov8-seg-mdka-gated.yaml",      # 改进2：门控融合 gated
         # "yolov8-seg-mdka-boundary.yaml",   # 改进3-B1：边界增强 boundary
@@ -68,11 +64,11 @@ def main():
 
     # 修改理由：A800显存充足；yolov8n-seg在640分割通常可用更大batch提升稳定性与效率。
     # 经验推荐：batch=64 作为起点（如果你模块更重或显存占用更大，降到32）。
-    batch = 16
+    batch = 8
 
     # 修改理由：Ultralytics默认lr0对batch=64附近较合适；消融对比中保持相同lr更公平。
     # 若你将batch改为32，可把lr0改为0.005；若batch改为16，lr0改为0.0025（线性缩放）。
-    lr0 = 0.0025
+    lr0 = 0.01
 
     # 修改理由：4000张数据，200 epochs 通常足够收敛并观察差异；你原来就是200，保持可比。
     epochs = 200

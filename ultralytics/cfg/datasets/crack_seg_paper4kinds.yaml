@@ -1,0 +1,6 @@
+train: D:/BaiduNetdiskDownload/Comprehensive Bridge Damage Dataset/Processed/Last dataset/ComSplit7214kind/train/images
+val: D:/BaiduNetdiskDownload/Comprehensive Bridge Damage Dataset/Processed/Last dataset/ComSplit7214kind/valid/images
+test: D:/BaiduNetdiskDownload/Comprehensive Bridge Damage Dataset/Processed/Last dataset/ComSplit7214kind/test/images
+
+nc: 4
+names: ["Cracks","honeycombing","spalling","rebar exposure"]

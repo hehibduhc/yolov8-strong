@@ -21,6 +21,28 @@
 ## 0317工作日志
 （1）今天让codex自己找改进方向，把我代码改了将mdka-sadilation和gated结合起来，效果最好，miou达到了88,其他不行
 
+## 0319工作日志
+（1）今天的改动是验证指标从验证集改为了测试集，我也觉得更合理，在简单数据集上，测试集在miou上表现更好，在论文数据集中,map表现好，可以写论文
+
+## 0324工作日志
+（1）今天改动是增加了几个损失函数，看看不同损失函数对于yolov8-seg分割的结果，具体改进是以下三组改动：
+bce_dice = base + dice_weight * dice_loss
+bce_tversky = base + tversky_weight * tversky_loss
+bce_dice_boundary = base + dice_weight * dice_loss + boundary_weight * boundary_loss
+通过model.train()显示指定不同的损失函数，指定方法如下示例：
+（1）seg_loss_type="bce_dice",
+    dice_weight=1.0,
+（2）seg_loss_type="bce_tversky",
+    tversky_weight=1.0,
+    tversky_alpha=0.7,
+    tversky_beta=0.3,
+（3）seg_loss_type="bce_dice_boundary",
+    dice_weight=1.0,
+    boundary_weight=0.2,
+
+## 0325工作日志
+
+
 # 工作文件
 
 新增了一个工具，在tools-excel0313中，用于按照指定指标提取文件夹中result.csv的最好轮次结果进行比较

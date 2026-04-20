@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import glob
 from pathlib import Path
+import sys
 from typing import Any
 
 import pandas as pd
@@ -12,9 +13,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Batch validate YOLO best.pt weights and export metrics to Excel.")
     parser.add_argument(
         "--weights",
-        nargs="*",
+        nargs="+",
+        action="append",
         default=[],
-        help="One or more best.pt paths. Example: --weights runs/segment/exp1/weights/best.pt runs/segment/exp2/weights/best.pt",
+        help=(
+            "One or more best.pt paths. Supports repeated usage, for example: "
+            "--weights runs/segment/exp1/weights/best.pt --weights runs/segment/exp2/weights/best.pt"
+        ),
     )
     parser.add_argument(
         "--glob",
@@ -36,7 +41,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", default="val", help="Dataset split for validation.")
     parser.add_argument("--plots", action="store_true", help="Whether to save validation plots.")
     parser.add_argument("--output", default="result.xlsx", help="Output Excel file path.")
-    return parser.parse_args()
+    return parser.parse_args(sanitize_cli_args(sys.argv[1:]))
+
+
+def sanitize_cli_args(argv: list[str]) -> list[str]:
+    sanitized: list[str] = []
+    for arg in argv:
+        if arg == "^":
+            continue
+        if arg.endswith("^") and arg != "^":
+            arg = arg[:-1]
+        if arg:
+            sanitized.append(arg)
+    return sanitized
+
+
+def flatten_weight_args(weight_groups: list[list[str]]) -> list[str]:
+    flattened: list[str] = []
+    for group in weight_groups:
+        flattened.extend(group)
+    return flattened
 
 
 def resolve_weight_paths(weight_args: list[str], weight_globs: list[str]) -> list[Path]:
@@ -181,7 +205,7 @@ def save_excel(result_rows: list[dict[str, Any]], output_path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    weight_paths = resolve_weight_paths(args.weights, args.weight_globs)
+    weight_paths = resolve_weight_paths(flatten_weight_args(args.weights), args.weight_globs)
     val_kwargs = build_val_kwargs(args)
 
     from ultralytics import YOLO
@@ -210,25 +234,38 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 
-r"""python val_local.py ^
-  --weights runs\segment\backbone-conv-HWD-module\yolov8-seg-hwd-backbone-4down\weights\best.pt^
+r"""CMD:
+python val_local.py ^
+  --weights runs\segment\backbone-conv-HWD-module\yolov8-seg-hwd-backbone-4down\weights\best.pt ^
   --data ultralytics/cfg/datasets/crack_seg.yaml ^
   --device 0 ^
-  --split test
+  --split test ^
   --output result.xlsx
 
-  python val_local.py ^
-  --weights runs\segment\0315_paper_ablation\yolov8-seg_seed43\weights\best.pt
-  runs\segment\0315_paper_ablation\yolov8-seg-mdka-sadilation_seed43\weights\best.pt
-  runs\segment\0315_paper_ablation\yolov8-seg-mdka-sadilation-sppf-replk-full_seed43\weights\best.pt
-  runs\segment\0315_paper_ablation\yolov8-seg-spd13_seed43\weights\best.pt
-  runs\segment\0315_paper_ablation\yolov8-seg-spd13-mdka-sadilation_seed43\weights\best.pt
-  runs\segment\0315_paper_ablation\yolov8-seg-spd13-mdka-sadilation-sppf-replk-full_seed43\weights\best.pt
-  runs\segment\0315_paper_ablation\yolov8-seg-spd13-sppf-replk-full_seed43\weights\best.pt
-  runs\segment\0315_paper_ablation\yolov8-seg-sppf-replk-full_seed43\weights\best.pt^
+python val_local.py ^
+  --weights runs\segment\yolov8-seg_seed42\weights\best.pt ^
+  --weights runs\segment\yolov8-seg_seed43\weights\best.pt ^
+  --weights runs\segment\yolov8-seg_seed44\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-mdka-sadilation_seed42\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-mdka-sadilation_seed43\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-mdka-sadilation_seed44\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-sppf-replk-full_seed42\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-sppf-replk-full_seed43\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-sppf-replk-full_seed44\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-mdka-sadilation-sppf-replk-full_seed42\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-mdka-sadilation-sppf-replk-full_seed43\weights\best.pt ^
+  --weights runs\segment\yolov8-seg-mdka-sadilation-sppf-replk-full_seed44\weights\best.pt ^
   --data ultralytics/cfg/datasets/crack_seg_paper.yaml ^
   --device 0 ^
-  --split test
+  --split test ^
+  --output result.xlsx
+
+
+python val_local.py ^
+  --weights runs\segment\yolov8-seg_seed42\weights\best.pt ^
+  --data ultralytics/cfg/datasets/crack_seg_paper.yaml ^
+  --device 0 ^
+  --split test ^
   --output result.xlsx
 
 """

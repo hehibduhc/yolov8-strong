@@ -1,0 +1,6 @@
+train: D:/BaiduNetdiskDownload/crack_0316_lab/crack-seg.yolov8-compar/train/images
+val: D:/BaiduNetdiskDownload/crack_0316_lab/crack-seg.yolov8-compar/valid/images
+test: D:/BaiduNetdiskDownload/crack_0316_lab/crack-seg.yolov8-compar/test/images
+
+nc: 1
+names: ["Cracks"]

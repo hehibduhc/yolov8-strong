@@ -1506,6 +1506,9 @@ def load_checkpoint(weight, device=None, inplace=True, fuse=False):
             m.inplace = inplace
         elif isinstance(m, torch.nn.Upsample) and not hasattr(m, "recompute_scale_factor"):
             m.recompute_scale_factor = None  # torch 1.11.0 compatibility
+        elif isinstance(m, Segment) and not hasattr(m, "use_detail_proto"):
+            m.use_detail_proto = False
+            m.detail_ch = None
 
     # Return model and ckpt
     return model, ckpt

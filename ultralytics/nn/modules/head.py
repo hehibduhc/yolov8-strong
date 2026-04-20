@@ -264,9 +264,11 @@ class Segment(Detect):
 
     def forward(self, x: list[torch.Tensor]) -> tuple | list[torch.Tensor]:
         """Return model outputs and mask coefficients with optional P2-guided prototype refinement."""
-        x_det = x[:3] if self.use_detail_proto else x
-        detail_feat = x[3] if self.use_detail_proto else None
-        p = self.proto(x_det[0], detail_feat) if self.use_detail_proto else self.proto(x_det[0])
+        # Backward compatibility: old serialized Segment heads may not have this attribute.
+        use_detail_proto = getattr(self, "use_detail_proto", False)
+        x_det = x[:3] if use_detail_proto else x
+        detail_feat = x[3] if use_detail_proto else None
+        p = self.proto(x_det[0], detail_feat) if use_detail_proto else self.proto(x_det[0])
         bs = p.shape[0]  # batch size
 
         mc = torch.cat([self.cv4[i](x_det[i]).view(bs, self.nm, -1) for i in range(self.nl)], 2)  # mask coefficients
