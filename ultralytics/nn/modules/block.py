@@ -51,6 +51,7 @@ __all__ = (
     "BiFPNLayer3",
     "Bottleneck",
     "BottleneckCSP",
+    "CARAFE",
     "C2f",
     "C2fAttn",
     "C2fCIB",
@@ -223,6 +224,42 @@ class Proto(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Perform a forward pass through layers using an upsampled input image."""
         return self.cv3(self.cv2(self.upsample(self.cv1(x))))
+
+
+class CARAFE(nn.Module):
+    """Content-aware reassembly upsampling with fixed input/output channels."""
+
+    def __init__(
+        self, c1: int, scale: int = 2, kernel_size: int = 5, up_kernel: int = 5, compressed_channels: int = 64
+    ):
+        """Initialize CARAFE with channel compression and content encoder."""
+        super().__init__()
+        if scale < 1:
+            raise ValueError(f"scale must be >= 1, but got {scale}")
+        if kernel_size < 1 or kernel_size % 2 == 0:
+            raise ValueError(f"kernel_size must be a positive odd integer, but got {kernel_size}")
+        if up_kernel < 1 or up_kernel % 2 == 0:
+            raise ValueError(f"up_kernel must be a positive odd integer, but got {up_kernel}")
+        self.scale = scale
+        self.kernel_size = kernel_size
+        self.compress = Conv(c1, compressed_channels, k=1, s=1)
+        self.encoder = nn.Conv2d(
+            compressed_channels, (scale**2) * (kernel_size**2), kernel_size=up_kernel, padding=up_kernel // 2
+        )
+        self.pixel_shuffle = nn.PixelShuffle(scale)
+        self.upsample = nn.Upsample(scale_factor=scale, mode="nearest")
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Generate dynamic reassembly kernels and upsample x by `scale`."""
+        b, c, h, w = x.shape
+        mask = self.encoder(self.compress(x))
+        mask = self.pixel_shuffle(mask).view(b, self.kernel_size**2, h * self.scale, w * self.scale)
+        mask = mask.softmax(dim=1)
+
+        x_up = self.upsample(x)
+        patches = F.unfold(x_up, kernel_size=self.kernel_size, padding=self.kernel_size // 2)
+        patches = patches.view(b, c, self.kernel_size**2, h * self.scale, w * self.scale)
+        return torch.einsum("bkhw,bckhw->bchw", mask, patches)
 
 
 class DirectionalStripRefine(nn.Module):
