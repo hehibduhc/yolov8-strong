@@ -118,8 +118,10 @@ class DSConv2d(nn.Module):
         return sampled
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        offsets = torch.tanh(self.offset_norm(self.offset_conv(x))) if self.if_offset else x.new_zeros(
-            (x.shape[0], 2 * self.kernel_size, x.shape[2], x.shape[3])
+        offsets = (
+            torch.tanh(self.offset_norm(self.offset_conv(x)))
+            if self.if_offset
+            else x.new_zeros((x.shape[0], 2 * self.kernel_size, x.shape[2], x.shape[3]))
         )
         sampled = self._sample(x, offsets)
         y = self.proj(sampled).squeeze(2)
