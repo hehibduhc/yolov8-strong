@@ -19,7 +19,9 @@ from ultralytics.nn.modules import (
     C2PSA,
     C3,
     C3TR,
+    CARAFE,
     ELAN1,
+    EMA,
     MCSTA,
     OBB,
     PSA,
@@ -41,11 +43,11 @@ from ultralytics.nn.modules import (
     BiFPNBlock,
     Bottleneck,
     BottleneckCSP,
-    CARAFE,
     C2f,
     C2fAttn,
     C2fCIB,
     C2fDWR,
+    C2fFaster,
     C2fMDKA,
     C2fMDKAStrip,
     C2fPSA,
@@ -67,6 +69,7 @@ from ultralytics.nn.modules import (
     Focus,
     GhostBottleneck,
     GhostConv,
+    GSConv,
     HGBlock,
     HGStem,
     HWDDown,
@@ -94,6 +97,7 @@ from ultralytics.nn.modules import (
     SPPFRepLKLite,
     SPPFSPRes,
     TorchVision,
+    VoVGSCSP,
     WorldDetect,
     YOLOEDetect,
     YOLOESegment,
@@ -1575,10 +1579,13 @@ def parse_model(d, ch, verbose=True):
             C2PSA,
             DWConv,
             Focus,
+            GSConv,
+            EMA,
             BottleneckCSP,
             C1,
             C2,
             C2f,
+            C2fFaster,
             C2fMDKA,
             C2fMDKAStrip,
             C2fDWR,
@@ -1591,6 +1598,7 @@ def parse_model(d, ch, verbose=True):
             C2fAttn,
             C3,
             C3TR,
+            VoVGSCSP,
             C3Ghost,
             torch.nn.ConvTranspose2d,
             DWConvTranspose2d,
@@ -1621,6 +1629,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
+            C2fFaster,
             C2fMDKA,
             C2fMDKAStrip,
             C2fDWR,
@@ -1628,6 +1637,7 @@ def parse_model(d, ch, verbose=True):
             C2fAttn,
             C3,
             C3TR,
+            VoVGSCSP,
             C3Ghost,
             C3x,
             RepC3,
@@ -1657,6 +1667,10 @@ def parse_model(d, ch, verbose=True):
             c2 = make_divisible(min(args[0], max_channels) * width, 8)
             args = [[ch[x] for x in f], c2, *args[1:]]
         elif m is CARAFE:
+            c1 = ch[f]
+            args = [c1, *args]
+            c2 = c1
+        elif m is EMA:
             c1 = ch[f]
             args = [c1, *args]
             c2 = c1

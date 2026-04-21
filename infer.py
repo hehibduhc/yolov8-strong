@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
 from ultralytics import YOLO
 from ultralytics.utils.files import increment_path
 
@@ -186,9 +187,7 @@ def parse_roi_text(roi_text: str, width: int, height: int) -> PolygonROI:
 def parse_polygon_text(polygon_text: str, width: int, height: int) -> PolygonROI:
     raw_points = [segment.strip() for segment in polygon_text.replace(";", " ").split() if segment.strip()]
     if len(raw_points) < 3:
-        raise ValueError(
-            f"Invalid polygon '{polygon_text}'. Expected at least 3 points in 'x1,y1 x2,y2 x3,y3' format"
-        )
+        raise ValueError(f"Invalid polygon '{polygon_text}'. Expected at least 3 points in 'x1,y1 x2,y2 x3,y3' format")
 
     points: list[list[int]] = []
     for raw_point in raw_points:
@@ -221,16 +220,12 @@ def load_rois_from_args(args: argparse.Namespace, width: int, height: int) -> li
                 points = item.get("points")
                 if not isinstance(points, list):
                     raise ValueError("Polygon dict items must contain a 'points' list")
-                rois.append(
-                    PolygonROI(points=[clamp_point(point[0], point[1], width, height) for point in points])
-                )
+                rois.append(PolygonROI(points=[clamp_point(point[0], point[1], width, height) for point in points]))
             elif isinstance(item, list):
                 if len(item) == 4 and all(isinstance(value, (int, float)) for value in item):
                     rois.append(clamp_roi(item[0], item[1], item[2], item[3], width, height))
                 else:
-                    rois.append(
-                        PolygonROI(points=[clamp_point(point[0], point[1], width, height) for point in item])
-                    )
+                    rois.append(PolygonROI(points=[clamp_point(point[0], point[1], width, height) for point in item]))
             else:
                 raise ValueError("Polygon file items must be polygon point lists, polygon dicts, or legacy ROI boxes")
 
@@ -328,10 +323,10 @@ def select_rois(image: np.ndarray, max_side: int) -> list[PolygonROI]:
     for x, y, w, h in rois:
         if w <= 0 or h <= 0:
             continue
-        x1 = int(round(x / scale))
-        y1 = int(round(y / scale))
-        x2 = int(round((x + w) / scale))
-        y2 = int(round((y + h) / scale))
+        x1 = round(x / scale)
+        y1 = round(y / scale)
+        x2 = round((x + w) / scale)
+        y2 = round((y + h) / scale)
         selected.append(clamp_roi(x1, y1, x2, y2, width, height))
 
     if not selected:
@@ -470,7 +465,9 @@ def predict_selected_rois(
 
     total_tiles = 0
     for roi in rois:
-        total_tiles += len(build_starts(roi.width, args.tile_size, args.overlap)) * len(build_starts(roi.height, args.tile_size, args.overlap))
+        total_tiles += len(build_starts(roi.width, args.tile_size, args.overlap)) * len(
+            build_starts(roi.height, args.tile_size, args.overlap)
+        )
 
     tile_index = 0
     for roi_index, roi in enumerate(rois, start=1):
@@ -574,7 +571,9 @@ def main() -> None:
     if not image_path.is_file():
         raise FileNotFoundError(f"source is not a valid image file: {args.source}")
 
-    print("Assumption: the same crack instance overlaps or nearly touches in adjacent tiles, so masks can be merged by overlap.")
+    print(
+        "Assumption: the same crack instance overlaps or nearly touches in adjacent tiles, so masks can be merged by overlap."
+    )
     image = imread_unicode(image_path)
     print(f"Image size: {image.shape[1]} x {image.shape[0]}")
 

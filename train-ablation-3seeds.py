@@ -11,11 +11,12 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
 from ultralytics import YOLO
 
 
 def set_seed(seed: int = 42, deterministic: bool = True):
-    """固定随机种子与确定性设置（尽可能复现）"""
+    """固定随机种子与确定性设置（尽可能复现）."""
     # 修改理由：固定 python / numpy / torch 随机性，降低实验波动，提高消融对比可信度。
     random.seed(seed)
     np.random.seed(seed)
@@ -51,8 +52,9 @@ def main():
     # 修改理由：这里默认主实验显式指定 yolov8m-seg.yaml，从而确保结构是 m 而不是 n。
     exp_yamls = [
         # "yolov8-seg.yaml",
-        # "yolov8-seg-mdka-sadilation.yaml",
-        "yolov8n-seg-mdka-sadilation-sppf-replk-full.yaml"
+        "yolov8-seg-sppf-replk-full.yaml",
+        "yolov8-seg-mdka-sadilation.yaml",
+        "yolov8-seg-mdka-sadilation-sppf-replk-full.yaml",
     ]
 
     # =========================
@@ -60,7 +62,7 @@ def main():
     # =========================
     # 修改理由：你原注释写的是跑 3 个 seed，但代码只有 [42]。
     # 修改理由：这里直接改为 3 个 seed，和你的实验设计保持一致。
-    seeds = [42]
+    seeds = [42, 43, 44]
 
     # =========================
     # 训练超参（保持一致，确保消融公平）
@@ -122,25 +124,16 @@ def main():
                 seed=seed,
                 deterministic=True,
                 amp=amp,
-
                 batch=batch,
                 epochs=epochs,
                 patience=patience,
                 workers=workers,
-
                 optimizer=optimizer,
                 lr0=lr0,
                 momentum=momentum,
                 weight_decay=weight_decay,
-
-                seg_loss_type="bce_tversky",
-                tversky_weight=1.0,
-                tversky_alpha=0.7,
-                tversky_beta=0.3,
-
                 save=True,
                 val=True,
-
                 project="runs/segment",
                 name=f"{yaml_stem}_seed{seed}",
                 exist_ok=False,

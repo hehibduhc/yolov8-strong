@@ -13,7 +13,7 @@ from ultralytics.utils.ops import crop_mask, xywh2xyxy, xyxy2xywh
 from ultralytics.utils.tal import RotatedTaskAlignedAssigner, TaskAlignedAssigner, dist2bbox, dist2rbox, make_anchors
 from ultralytics.utils.torch_utils import autocast
 
-from .metrics import bbox_iou, probiou
+from .metrics import bbox_iou, bbox_mpdiou, probiou
 from .tal import bbox2dist
 
 
@@ -108,10 +108,14 @@ class DFLoss(nn.Module):
 class BboxLoss(nn.Module):
     """Criterion class for computing training losses for bounding boxes."""
 
-    def __init__(self, reg_max: int = 16):
-        """Initialize the BboxLoss module with regularization maximum and DFL settings."""
+    def __init__(self, reg_max: int = 16, iou_type: str = "ciou", mpdiou_lambda: float = 1.0):
+        """Initialize the BboxLoss module with DFL settings and configurable IoU regression type."""
         super().__init__()
         self.dfl_loss = DFLoss(reg_max) if reg_max > 1 else None
+        self.iou_type = iou_type.lower()
+        self.mpdiou_lambda = mpdiou_lambda
+        if self.iou_type not in {"iou", "giou", "diou", "ciou", "mpdiou"}:
+            raise ValueError(f"Unsupported iou_type='{self.iou_type}'. Expected one of: iou, giou, diou, ciou, mpdiou.")
 
     def forward(
         self,
@@ -125,8 +129,23 @@ class BboxLoss(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
-        iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
-        loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
+        if self.iou_type == "mpdiou":
+            iou_metric = bbox_mpdiou(
+                pred_bboxes[fg_mask],
+                target_bboxes[fg_mask],
+                xywh=False,
+                penalty_weight=self.mpdiou_lambda,
+            )
+        else:
+            iou_metric = bbox_iou(
+                pred_bboxes[fg_mask],
+                target_bboxes[fg_mask],
+                xywh=False,
+                GIoU=self.iou_type == "giou",
+                DIoU=self.iou_type == "diou",
+                CIoU=self.iou_type == "ciou",
+            )
+        loss_iou = ((1.0 - iou_metric) * weight).sum() / target_scores_sum
 
         # DFL loss
         if self.dfl_loss:
@@ -211,7 +230,11 @@ class v8DetectionLoss:
         self.use_dfl = m.reg_max > 1
 
         self.assigner = TaskAlignedAssigner(topk=tal_topk, num_classes=self.nc, alpha=0.5, beta=6.0)
-        self.bbox_loss = BboxLoss(m.reg_max).to(device)
+        self.bbox_loss = BboxLoss(
+            reg_max=m.reg_max,
+            iou_type=getattr(h, "iou_loss", "ciou"),
+            mpdiou_lambda=getattr(h, "mpdiou_lambda", 1.0),
+        ).to(device)
         self.proj = torch.arange(m.reg_max, dtype=torch.float, device=device)
 
     def preprocess(self, targets: torch.Tensor, batch_size: int, scale_tensor: torch.Tensor) -> torch.Tensor:
@@ -334,8 +357,12 @@ def boundary_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -
     target = target.to(dtype=pred_prob.dtype).unsqueeze(1)
     sobel_x = pred_prob.new_tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]).view(1, 1, 3, 3)
     sobel_y = pred_prob.new_tensor([[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]]).view(1, 1, 3, 3)
-    pred_edge = torch.sqrt(F.conv2d(pred_prob, sobel_x, padding=1).square() + F.conv2d(pred_prob, sobel_y, padding=1).square() + eps)
-    target_edge = torch.sqrt(F.conv2d(target, sobel_x, padding=1).square() + F.conv2d(target, sobel_y, padding=1).square() + eps)
+    pred_edge = torch.sqrt(
+        F.conv2d(pred_prob, sobel_x, padding=1).square() + F.conv2d(pred_prob, sobel_y, padding=1).square() + eps
+    )
+    target_edge = torch.sqrt(
+        F.conv2d(target, sobel_x, padding=1).square() + F.conv2d(target, sobel_y, padding=1).square() + eps
+    )
     pred_edge = pred_edge / pred_edge.amax(dim=(2, 3), keepdim=True).clamp_min(eps)
     target_edge = target_edge / target_edge.amax(dim=(2, 3), keepdim=True).clamp_min(eps)
     return F.l1_loss(pred_edge, target_edge)
@@ -351,7 +378,9 @@ class v8SegmentationLoss(v8DetectionLoss):
         self.seg_loss_type = str(getattr(model.args, "seg_loss_type", "baseline")).lower()
         valid_seg_loss_types = {"baseline", "bce_dice", "bce_tversky", "bce_dice_boundary"}
         if self.seg_loss_type not in valid_seg_loss_types:
-            raise ValueError(f"Unsupported seg_loss_type='{self.seg_loss_type}'. Choose from {sorted(valid_seg_loss_types)}")
+            raise ValueError(
+                f"Unsupported seg_loss_type='{self.seg_loss_type}'. Choose from {sorted(valid_seg_loss_types)}"
+            )
 
         self.dice_weight = float(getattr(model.args, "dice_weight", 1.0))
         self.tversky_weight = float(getattr(model.args, "tversky_weight", 1.0))
