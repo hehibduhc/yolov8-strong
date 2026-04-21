@@ -51,9 +51,8 @@ def main():
     # 修改理由：这里默认主实验显式指定 yolov8m-seg.yaml，从而确保结构是 m 而不是 n。
     exp_yamls = [
         # "yolov8-seg.yaml",
-        "yolov8-seg-sppf-replk-full.yaml",
-        "yolov8-seg-mdka-sadilation.yaml",
-        "yolov8-seg-mdka-sadilation-sppf-replk-full.yaml"
+        # "yolov8-seg-mdka-sadilation.yaml",
+        "yolov8n-seg-mdka-sadilation-sppf-replk-full.yaml"
     ]
 
     # =========================
@@ -61,7 +60,7 @@ def main():
     # =========================
     # 修改理由：你原注释写的是跑 3 个 seed，但代码只有 [42]。
     # 修改理由：这里直接改为 3 个 seed，和你的实验设计保持一致。
-    seeds = [42,43,44]
+    seeds = [42]
 
     # =========================
     # 训练超参（保持一致，确保消融公平）
@@ -82,6 +81,7 @@ def main():
 
     # 修改理由：显式指定优化器为 SGD，防止 Ultralytics 自动选择 AdamW。
     optimizer = "SGD"
+    # optimizer = 'auto'
 
     # 修改理由：保持 epoch 一致，保证不同 seed、不同模型收敛条件一致。
     epochs = 200
@@ -132,6 +132,11 @@ def main():
                 lr0=lr0,
                 momentum=momentum,
                 weight_decay=weight_decay,
+
+                seg_loss_type="bce_tversky",
+                tversky_weight=1.0,
+                tversky_alpha=0.7,
+                tversky_beta=0.3,
 
                 save=True,
                 val=True,
