@@ -83,6 +83,7 @@ def main():
 
     # 修改理由：显式指定优化器为 SGD，防止 Ultralytics 自动选择 AdamW。
     optimizer = "SGD"
+    # optimizer = 'auto'
 
     # 修改理由：保持 epoch 一致，保证不同 seed、不同模型收敛条件一致。
     epochs = 200

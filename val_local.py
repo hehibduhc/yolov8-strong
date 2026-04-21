@@ -262,7 +262,7 @@ python val_local.py ^
 
 
 python val_local.py ^
-  --weights runs\segment\yolov8-seg_seed42\weights\best.pt ^
+  --weights runs\segment\yolov8n-seg-carafe_seed42\weights\best.pt ^
   --data ultralytics/cfg/datasets/crack_seg_paper.yaml ^
   --device 0 ^
   --split test ^
