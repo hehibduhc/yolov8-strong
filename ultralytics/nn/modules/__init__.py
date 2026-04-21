@@ -116,6 +116,7 @@ from .conv import (
     SpatialAttention,
 )
 from .custom_seg_blocks import EMA, C2fFaster, FasterBlock, GSBottleneck, GSConv, PConv, VoVGSCSP
+from .crack_backbone import C2fDSC, DSCBottleNeck, DSConv2d, SPDConv, SpaceToDepth
 from .fca import FCALayer, FCALayerResidual
 from .head import (
     OBB,
@@ -193,6 +194,7 @@ __all__ = (
     "C2fAttn",
     "C2fCIB",
     "C2fDWR",
+    "C2fDSC",
     "C2fFaster",
     "C2fMDKA",
     "C2fMDKAStrip",
@@ -215,6 +217,8 @@ __all__ = (
     "DWConv",
     "DWConvTranspose2d",
     "DWRBottleneck",
+    "DSConv2d",
+    "DSCBottleNeck",
     "DeformableTransformerDecoder",
     "DeformableTransformerDecoderLayer",
     "Detect",
@@ -265,6 +269,7 @@ __all__ = (
     "SECBAMLite",
     "SLPALite",
     "SPDConvDown",
+    "SPDConv",
     "SPPFFCARes",
     "SPPFLSKARes",
     "SPPFRepLKFull",
@@ -272,6 +277,7 @@ __all__ = (
     "SPPFSPRes",
     "Segment",
     "SpatialAttention",
+    "SpaceToDepth",
     "StripPoolingAtrous",
     "StripPoolingLite",
     "StripPoolingLiteRes",
