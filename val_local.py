@@ -262,10 +262,7 @@ python val_local.py ^
 
 
 python val_local.py ^
-  --weights runs\segment\0421ema\yolov8n-seg-ema_seed42\weights\best.pt ^
-  --weights runs\segment\0421ema\yolov8n-seg-gsneck_seed42\weights\best.pt ^
-  --weights runs\segment\0421ema\yolov8n-seg-pconv-gsneck-ema_seed42\weights\best.pt ^
-  --weights runs\segment\0421ema\yolov8n-seg_seed42\weights\best.pt
+  --weights runs\segment\yolov8n-seg-spd-dsc-backbone_seed43\weights\best.pt ^
   --data ultralytics/cfg/datasets/crack_seg_paper.yaml ^
   --device 0 ^
   --split test ^

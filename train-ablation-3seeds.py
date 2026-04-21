@@ -51,7 +51,7 @@ def main():
     # 修改理由：如果你后面有多个自定义消融模型，建议这些 yaml 都基于 yolov8m-seg 的结构改，而不是直接用 yolov8-seg.yaml。
     # 修改理由：这里默认主实验显式指定 yolov8m-seg.yaml，从而确保结构是 m 而不是 n。
     exp_yamls = [
-        "yolov8n-seg.yaml",
+        "yolov8n-seg-spd-dsc-backbone.yaml",
         # "yolov8-seg-sppf-replk-full.yaml",
         # "yolov8-seg-mdka-sadilation.yaml",
         # "yolov8-seg-mdka-sadilation-sppf-replk-full.yaml",
@@ -62,7 +62,7 @@ def main():
     # =========================
     # 修改理由：你原注释写的是跑 3 个 seed，但代码只有 [42]。
     # 修改理由：这里直接改为 3 个 seed，和你的实验设计保持一致。
-    seeds = [42]
+    seeds = [43,44]
 
     # =========================
     # 训练超参（保持一致，确保消融公平）
@@ -129,10 +129,10 @@ def main():
                 patience=patience,
                 workers=workers,
                 optimizer=optimizer,
-                seg_loss_type="bce_tversky",
-                tversky_weight=1.0,
-                tversky_alpha=0.7,
-                tversky_beta=0.3,
+                # seg_loss_type="bce_tversky",
+                # tversky_weight=1.0,
+                # tversky_alpha=0.7,
+                # tversky_beta=0.3,
                 lr0=lr0,
                 momentum=momentum,
                 weight_decay=weight_decay,
