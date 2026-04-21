@@ -115,9 +115,7 @@ class BboxLoss(nn.Module):
         self.iou_type = iou_type.lower()
         self.mpdiou_lambda = mpdiou_lambda
         if self.iou_type not in {"iou", "giou", "diou", "ciou", "mpdiou"}:
-            raise ValueError(
-                f"Unsupported iou_type='{self.iou_type}'. Expected one of: iou, giou, diou, ciou, mpdiou."
-            )
+            raise ValueError(f"Unsupported iou_type='{self.iou_type}'. Expected one of: iou, giou, diou, ciou, mpdiou.")
 
     def forward(
         self,
@@ -359,8 +357,12 @@ def boundary_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -
     target = target.to(dtype=pred_prob.dtype).unsqueeze(1)
     sobel_x = pred_prob.new_tensor([[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]]).view(1, 1, 3, 3)
     sobel_y = pred_prob.new_tensor([[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]]).view(1, 1, 3, 3)
-    pred_edge = torch.sqrt(F.conv2d(pred_prob, sobel_x, padding=1).square() + F.conv2d(pred_prob, sobel_y, padding=1).square() + eps)
-    target_edge = torch.sqrt(F.conv2d(target, sobel_x, padding=1).square() + F.conv2d(target, sobel_y, padding=1).square() + eps)
+    pred_edge = torch.sqrt(
+        F.conv2d(pred_prob, sobel_x, padding=1).square() + F.conv2d(pred_prob, sobel_y, padding=1).square() + eps
+    )
+    target_edge = torch.sqrt(
+        F.conv2d(target, sobel_x, padding=1).square() + F.conv2d(target, sobel_y, padding=1).square() + eps
+    )
     pred_edge = pred_edge / pred_edge.amax(dim=(2, 3), keepdim=True).clamp_min(eps)
     target_edge = target_edge / target_edge.amax(dim=(2, 3), keepdim=True).clamp_min(eps)
     return F.l1_loss(pred_edge, target_edge)
@@ -376,7 +378,9 @@ class v8SegmentationLoss(v8DetectionLoss):
         self.seg_loss_type = str(getattr(model.args, "seg_loss_type", "baseline")).lower()
         valid_seg_loss_types = {"baseline", "bce_dice", "bce_tversky", "bce_dice_boundary"}
         if self.seg_loss_type not in valid_seg_loss_types:
-            raise ValueError(f"Unsupported seg_loss_type='{self.seg_loss_type}'. Choose from {sorted(valid_seg_loss_types)}")
+            raise ValueError(
+                f"Unsupported seg_loss_type='{self.seg_loss_type}'. Choose from {sorted(valid_seg_loss_types)}"
+            )
 
         self.dice_weight = float(getattr(model.args, "dice_weight", 1.0))
         self.tversky_weight = float(getattr(model.args, "tversky_weight", 1.0))

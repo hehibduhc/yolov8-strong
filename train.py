@@ -7,7 +7,7 @@ def main():
     # 方式1：先加载yaml配置再加载预训练权重（推荐，可自定义网络）
 
     # 方式2：直接加载预训练权重（更简洁，无需手动指定yaml）
-    model = YOLO('./yolov8n-seg.pt')
+    model = YOLO("./yolov8n-seg.pt")
 
     # 2. 训练分割模型（参数可按需调整）
     model.train(
@@ -20,9 +20,7 @@ def main():
         val=True,  # 训练中验证
         epochs=200,
         name="test_scratch",
-        
-)
-    
+    )
 
 
 if __name__ == "__main__":
