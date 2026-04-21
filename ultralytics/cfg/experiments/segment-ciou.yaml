@@ -1,0 +1,7 @@
+task: segment
+mode: train
+box: 7.5
+cls: 0.5
+dfl: 1.5
+iou_loss: ciou
+mpdiou_lambda: 1.0

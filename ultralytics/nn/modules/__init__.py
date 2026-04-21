@@ -115,6 +115,7 @@ from .conv import (
     RepConv,
     SpatialAttention,
 )
+from .custom_seg_blocks import C2fFaster, EMA, GSBottleneck, GSConv, FasterBlock, PConv, VoVGSCSP
 from .fca import FCALayer, FCALayerResidual
 from .head import (
     OBB,
@@ -147,6 +148,13 @@ from .transformer import (
 )
 
 __all__ = (
+    "VoVGSCSP",
+    "PConv",
+    "FasterBlock",
+    "GSConv",
+    "GSBottleneck",
+    "EMA",
+    "C2fFaster",
     "AIFI",
     "C1",
     "C2",
