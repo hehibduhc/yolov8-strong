@@ -100,8 +100,7 @@ class DCNv2BNAct(nn.Module):
 
 
 class SPD_DCNv2Down(nn.Module):
-    """无池化下采样：SPD(scale=2) -> 1x1瓶颈(压通道) -> DCNv2(3x3, s=1) -> (可选1x1融合) - 输入: (B, Cin, H, W) - 输出: (B, Cout, H/2, W/2).
-    """
+    """无池化下采样：SPD(scale=2) -> 1x1瓶颈(压通道) -> DCNv2(3x3, s=1) -> (可选1x1融合) - 输入: (B, Cin, H, W) - 输出: (B, Cout, H/2, W/2)."""
 
     def __init__(self, c1, c2, scale=2, bottleneck_ratio=0.5, deform_groups=1, fuse_1x1=False):
         super().__init__()
